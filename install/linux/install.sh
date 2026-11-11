@@ -13,7 +13,18 @@ EXT_ID="awgbv@0xoni.ru"
 HOST_NAME="awgbv"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN_SRC="${1:-$HERE/../../dist/awgbv-linux-amd64}"
+case "$(uname -m)" in
+  x86_64|amd64) ARCH=amd64 ;;
+  aarch64|arm64) ARCH=arm64 ;;
+  *) ARCH=amd64 ;;
+esac
+BIN_SRC="${1:-}"
+if [[ -z "$BIN_SRC" ]]; then
+  for cand in "$HERE/../../dist/awgbv-linux-$ARCH" "$HOME/Downloads/awgbv-linux-$ARCH"; do
+    if [[ -f "$cand" ]]; then BIN_SRC="$cand"; break; fi
+  done
+fi
+BIN_SRC="${BIN_SRC:-$HERE/../../dist/awgbv-linux-$ARCH}"
 
 if [[ ! -f "$BIN_SRC" ]]; then
   echo "error: helper binary not found: $BIN_SRC" >&2

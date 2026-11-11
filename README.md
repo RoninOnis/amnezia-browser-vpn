@@ -65,6 +65,20 @@ the normal connection.
 
 ### 2. Установить хелпер (native messaging)
 
+**Самый быстрый путь — один файл, без клонирования репозитория.** Скрипт сам определит
+архитектуру, скачает бинарь из релиза, сверит sha256 и пропишет native-messaging манифест
+(включая snap-песочницу Firefox). Root не нужен.
+
+```bash
+VERSION=v0.1.1 bash install-linux.sh          # Linux
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install-windows.ps1   # Windows
+```
+
+Оба скрипта лежат в ассетах релиза. Ниже — установка из репозитория.
+
 **Linux**
 
 ```bash
