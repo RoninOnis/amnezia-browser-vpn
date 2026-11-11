@@ -21,6 +21,7 @@ CONTAINER=""
 LISTEN_PORT="${LISTEN_PORT:-443}"
 VERSION="${VERSION:-latest}"
 DRY_RUN=0
+OPEN_FIREWALL=0
 BASE="https://github.com/RoninOnis/amnezia-browser-vpn/releases"
 TOKEN="${TOKEN:-}"
 
@@ -30,6 +31,7 @@ while [ $# -gt 0 ]; do
     --container) CONTAINER="$2"; shift 2 ;;
     --port)      LISTEN_PORT="$2"; shift 2 ;;
     --dry-run)   DRY_RUN=1; shift ;;
+    --open-firewall) OPEN_FIREWALL=1; shift ;;
     -h|--help)   sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "неизвестный аргумент: $1" >&2; exit 1 ;;
   esac
@@ -121,6 +123,32 @@ if ss -lunp 2>/dev/null | grep -q ":${LISTEN_PORT} "; then
   exit 1
 fi
 
+# Файрвол хоста. Тонкость, на которой уже обожглись: порт Amnezia в docker
+# публикуется через DNAT/FORWARD и политику INPUT не задевает, поэтому AWG
+# работает. Спутник же слушает обычный сокет хоста, и его UDP-пакеты идут в
+# INPUT: при политике DROP они тихо умирают, снаружи это выглядит как «сервер
+# молчит», хотя служба запущена и порт слушается.
+FW_STATE="нет"
+FW_HINT=""
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | head -1 | grep -qi active; then
+  FW_STATE="ufw (включён)"
+  if ufw status 2>/dev/null | grep -qE "^${LISTEN_PORT}/udp +ALLOW"; then
+    FW_HINT=""
+  else
+    FW_HINT="ufw allow ${LISTEN_PORT}/udp"
+  fi
+elif command -v iptables >/dev/null 2>&1; then
+  POLICY="$(iptables -S INPUT 2>/dev/null | head -1 | awk '{print $NF}' || true)"
+  if [ "$POLICY" = "DROP" ]; then
+    FW_STATE="iptables INPUT DROP"
+    if ! iptables -S INPUT 2>/dev/null | grep -q -- "--dport ${LISTEN_PORT} -j ACCEPT"; then
+      FW_HINT="iptables -I INPUT -p udp --dport ${LISTEN_PORT} -j ACCEPT"
+    fi
+  else
+    FW_STATE="iptables INPUT ${POLICY:-ACCEPT}"
+  fi
+fi
+
 echo
 echo "План:"
 echo "  бинарь:  /usr/local/bin/awgbv-satellite"
@@ -128,6 +156,29 @@ echo "  конфиг:  /etc/awgbv-satellite.env (600)"
 echo "  служба:  awgbv-satellite, слушает 0.0.0.0:${LISTEN_PORT}/udp"
 echo "  цель:    ${TARGET}"
 echo "  docker:  только чтение, контейнеры не трогаются"
+echo "  файрвол: ${FW_STATE}"
+
+if [ -n "$FW_HINT" ]; then
+  echo
+  echo "ВНИМАНИЕ: ${LISTEN_PORT}/udp снаружи, скорее всего, не пройдёт — файрвол хоста."
+  echo "Порт Amnezia обходит это, потому что docker публикует его через DNAT/FORWARD,"
+  echo "а спутник слушает обычный сокет хоста и попадает в INPUT."
+  if [ "$OPEN_FIREWALL" = "1" ]; then
+    echo "→ открываю порт (--open-firewall)"
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | head -1 | grep -qi active; then
+      ufw allow "${LISTEN_PORT}/udp" >/dev/null && echo "   ufw: ${LISTEN_PORT}/udp разрешён"
+    else
+      iptables -I INPUT -p udp --dport "${LISTEN_PORT}" -j ACCEPT
+      echo "   iptables: правило добавлено"
+      echo "   Оно не переживёт перезагрузку. Сохранить:"
+      echo "     apt install -y iptables-persistent && netfilter-persistent save"
+    fi
+  else
+    echo "Разрешить вручную одной из команд:"
+    echo "  ${FW_HINT}"
+    echo "Либо запустить этот скрипт с --open-firewall."
+  fi
+fi
 
 if [ "$DRY_RUN" = "1" ]; then
   echo
@@ -187,6 +238,11 @@ if systemctl is-active --quiet awgbv-satellite; then
   echo "  ss -lunp | grep ':${LISTEN_PORT} '          # порт слушается"
   echo "  journalctl -u awgbv-satellite -n 20        # что происходит"
   echo
+  if [ -n "$FW_HINT" ] && [ "$OPEN_FIREWALL" != "1" ]; then
+    echo "НЕ ЗАБЫТЬ: ${LISTEN_PORT}/udp закрыт файрволом хоста (${FW_HINT}),"
+    echo "иначе снаружи будет тишина при внешне исправной службе."
+    echo
+  fi
   echo "Клиенту в расширении достаточно нажать «Подключить»: хелпер сам попробует 443."
   echo "В его логе появится: handshake ok ... (mtu 1280, endpoint <ip-сервера>:${LISTEN_PORT})"
   echo
