@@ -240,11 +240,42 @@ function renderSites() {
   }
 }
 
+// Переключатель нельзя перерисовывать, пока пользователь только что его нажал:
+// попап обновляет состояние каждые 4 секунды, и «откат» выглядел как поломка
+// ползунка — нажал ВЫКЛ, а он вернулся в ВКЛ.
+const justTouched = new Map();
+
+function setSwitch(el, value) {
+  const at = justTouched.get(el.id) || 0;
+  if (Date.now() - at < 2500) return; // не затираем только что сделанный выбор
+  el.checked = value;
+}
+
+// Переключатели сохраняются сразу при клике: отдельная кнопка «Сохранить»
+// для них не нужна и только путала.
+function bindSwitch(el, key) {
+  el.addEventListener("change", async () => {
+    justTouched.set(el.id, Date.now());
+    const res = await send("savePrefs", { [key]: el.checked });
+    if (!res || !res.ok) {
+      el.checked = !el.checked; // откат: сохранить не удалось
+      $("#prefsHint").textContent = "не сохранено: " + ((res && res.error) || "нет ответа");
+      return;
+    }
+    $("#prefsHint").textContent = "";
+    if (res.state) {
+      state = res.state;
+      renderTop();
+      renderHome();
+    }
+  });
+}
+
 function renderSettings() {
   const s = state;
   const t = s.tunnel || {};
-  $("#autoConnect").checked = !!s.autoConnect;
-  $("#mtuAuto").checked = s.mtuAuto !== false;
+  setSwitch($("#autoConnect"), !!s.autoConnect);
+  setSwitch($("#mtuAuto"), s.mtuAuto !== false);
   $("#listenPort").value = s.listenPort || 0;
   $("#helperMissingHint").textContent = s.helperMissing
     ? "Хелпер не найден. Кнопка «Установить хелпер» проведёт по шагам: скачать, открыть, запустить."
@@ -262,6 +293,7 @@ function renderSettings() {
     ? "—"
     : (att.ok ? "успешно, " : "ошибка, ") + fmtAgo(Math.floor(att.at / 1000))
       + (att.ok ? "" : " · " + (att.error || "без описания"));
+  $("#hLogPath").textContent = logPathFor(s.platformOs);
   $("#xVersion").textContent = browser.runtime.getManifest().version;
   renderUpdates();
 }
@@ -291,6 +323,14 @@ function versionCell(el, part) {
   }
   el.textContent = `${part.current} · актуально`;
   el.className = "";
+}
+
+// Показываем только путь той системы, где стоит расширение: чужие пути — шум.
+function logPathFor(platformOs) {
+  const win = platformOs === "win";
+  return win
+    ? "%LOCALAPPDATA%\\AwgBrowserVpn\\helper.log"
+    : "~/.local/state/awgbv/helper.log";
 }
 
 function renderUpdates() {
@@ -475,12 +515,12 @@ $("#btnClearList").addEventListener("click", async () => {
 
 /* ------------------------------------------------------------- Настройки */
 
+bindSwitch($("#autoConnect"), "autoConnect");
+bindSwitch($("#mtuAuto"), "mtuAuto");
+
+// Кнопка осталась для поля порта: переключатели сохраняются сами.
 $("#btnSavePrefs").addEventListener("click", async () => {
-  const res = await send("savePrefs", {
-    autoConnect: $("#autoConnect").checked,
-    mtuAuto: $("#mtuAuto").checked,
-    listenPort: Number($("#listenPort").value) || 0,
-  });
+  const res = await send("savePrefs", { listenPort: Number($("#listenPort").value) || 0 });
   $("#prefsHint").textContent = res && res.ok ? "сохранено" : "ошибка: " + ((res && res.error) || "?");
   await refresh();
 });
