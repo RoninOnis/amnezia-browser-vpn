@@ -51,6 +51,7 @@ const state = {
   retryDelay: 15000,
   nextRetryAt: 0,
   connecting: false, // идёт connect: второй параллельно не запускаем
+  updates: null,      // результат проверки версий аддона и хелпера
 };
 
 const HOST_MISSING = /no such native application|native application .* not found|No such native/i;
@@ -290,7 +291,90 @@ function publicState() {
     helperMissing: state.helperMissing,
     platformOs: state.platformOs,
     lastAttempt: state.lastAttempt,
+    updates: state.updates,
   };
+}
+
+/* ------------------------------------------------------- проверка версий */
+
+// Разбор версии в числа. Компонентов может быть сколько угодно: 0.3.6.1 законен.
+function parseVersion(v) {
+  const clean = String(v || "").trim().replace(/^v/i, "").split(/[-+]/)[0];
+  if (!clean) return null;
+  const parts = clean.split(".");
+  const out = [];
+  for (const p of parts) {
+    if (!/^\d+$/.test(p)) return null;
+    out.push(Number(p));
+  }
+  return out;
+}
+
+// -1 / 0 / 1. Хвостовые нули не считаются: 0.3.6 == 0.3.6.0, но 0.3.6.1 > 0.3.6.
+function compareVersions(a, b) {
+  const pa = parseVersion(a);
+  const pb = parseVersion(b);
+  if (!pa || !pb) return null;
+  const n = Math.max(pa.length, pb.length);
+  for (let i = 0; i < n; i++) {
+    const x = pa[i] || 0;
+    const y = pb[i] || 0;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+function isNewer(latest, current) {
+  const cmp = compareVersions(latest, current);
+  return cmp === 1; // null (непонятная версия) трактуем как «не новее»
+}
+
+// Проверка актуальности аддона и хелпера. Делается в хелпере, поэтому новых
+// разрешений в манифесте не нужно. Если проверить не удалось — честно говорим
+// «не удалось», а не показываем зелёное «всё актуально»: именно из-за такого
+// вранья люди месяцами сидят на старом хелпере.
+async function checkVersions(force = false) {
+  const addonCurrent = browser.runtime.getManifest().version;
+  const helperCurrent = state.helperMissing ? "" : state.helperVersion || "";
+
+  let info = null;
+  let error = "";
+  if (state.helperMissing) {
+    error = "хелпер не установлен";
+  } else {
+    const resp = await sendNative("update_check", { force }, 15000);
+    if (resp && resp.ok && resp.update) {
+      info = resp.update;
+      if (!info.checked) error = info.error || "не удалось проверить";
+    } else {
+      error = (resp && resp.error) || "хелпер не ответил";
+    }
+  }
+
+  const latest = info && info.checked ? info.latest || "" : "";
+  const helperLatest = (info && info.checked && info.helperLatest) || latest;
+
+  state.updates = {
+    checkedAt: Date.now(),
+    error,
+    pageUrl: (info && info.pageUrl) || "",
+    addon: {
+      current: addonCurrent,
+      latest,
+      // без данных проверки ничего не помечаем устаревшим
+      outdated: !!latest && isNewer(latest, addonCurrent),
+      unknown: !latest,
+    },
+    helper: {
+      current: helperCurrent,
+      latest: helperLatest,
+      outdated: !!helperLatest && !!helperCurrent && isNewer(helperLatest, helperCurrent),
+      unknown: !helperLatest || !helperCurrent,
+      missing: !!state.helperMissing,
+    },
+  };
+  notifyUI();
+  return state.updates;
 }
 
 /* -------------------------------------------------------------- operations */
@@ -431,6 +515,8 @@ async function refreshStatus() {
   }
   // Авто-лечение: включено, а туннеля нет (перезагрузка, падение демона, обновление бинаря).
   await ensureTunnel();
+  // Проверку версий делаем один раз за сессию и не ждём её: она ходит в сеть.
+  if (!state.updates && !state.helperMissing) checkVersions(false).catch(() => {});
   return publicState();
 }
 
@@ -472,6 +558,10 @@ browser.runtime.onMessage.addListener((msg) => {
   switch (msg.cmd) {
     case "getState":
       return Promise.resolve({ ok: true, state: publicState() });
+    case "checkVersions":
+      return checkVersions(!!msg.force)
+        .then((updates) => ({ ok: true, updates, state: publicState() }))
+        .catch((err) => ({ ok: false, error: String((err && err.message) || err) }));
     case "addProfile":
       return addProfile(msg.link).catch((err) => ({ ok: false, error: String((err && err.message) || err) }));
     case "removeProfile":

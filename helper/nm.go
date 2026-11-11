@@ -27,6 +27,7 @@ type nmMessage struct {
 	PortFallback *bool    `json:"portFallback,omitempty"`
 	RelayAddr    string   `json:"relayAddr,omitempty"`
 	RelayToken   string   `json:"relayToken,omitempty"`
+	Force        bool     `json:"force,omitempty"`
 }
 
 type nmReply struct {
@@ -35,6 +36,7 @@ type nmReply struct {
 	Error   string        `json:"error,omitempty"`
 	Status  *TunnelStatus `json:"status,omitempty"`
 	Version string        `json:"version,omitempty"`
+	Update  *UpdateInfo   `json:"update,omitempty"`
 }
 
 func runNativeMessaging() error {
@@ -117,6 +119,13 @@ func handleNM(msg nmMessage) nmReply {
 			return reply
 		}
 		reply.OK, reply.Error, reply.Status = resp.OK, resp.Error, resp.Status
+		return reply
+	case "update_check":
+		// Делаем проверку прямо здесь, не поднимая демон: это один HTTP-запрос,
+		// и проверка версий должна работать даже если демон не запущен.
+		info := checkUpdates(msg.Force)
+		reply.OK = true
+		reply.Update = &info
 		return reply
 	case "connect":
 		if msg.Profile == nil {

@@ -41,12 +41,14 @@ type request struct {
 	PortFallback *bool  `json:"portFallback,omitempty"`
 	RelayAddr    string `json:"relayAddr,omitempty"`
 	RelayToken   string `json:"relayToken,omitempty"`
+	Force        bool   `json:"force,omitempty"` // update_check: игнорировать кэш
 }
 
 type response struct {
 	OK     bool          `json:"ok"`
 	Error  string        `json:"error,omitempty"`
 	Status *TunnelStatus `json:"status,omitempty"`
+	Update *UpdateInfo   `json:"update,omitempty"`
 }
 
 func stateDir() string {
@@ -240,6 +242,9 @@ func (d *Daemon) handle(conn net.Conn) {
 		writeResp(conn, response{OK: true})
 	case "status":
 		writeResp(conn, response{OK: true, Status: d.statusLocked()})
+	case "update_check":
+		info := checkUpdates(req.Force)
+		writeResp(conn, response{OK: true, Update: &info})
 	case "connect": // обрабатывается в handleConnect, сюда не попадает
 		writeResp(conn, response{OK: false, Error: "internal: connect handled elsewhere"})
 	case "disconnect":

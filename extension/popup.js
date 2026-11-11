@@ -263,6 +263,62 @@ function renderSettings() {
     : (att.ok ? "успешно, " : "ошибка, ") + fmtAgo(Math.floor(att.at / 1000))
       + (att.ok ? "" : " · " + (att.error || "без описания"));
   $("#xVersion").textContent = browser.runtime.getManifest().version;
+  renderUpdates();
+}
+
+// Единая строка статуса версии: «0.3.7 · актуально», «0.3.6 → 0.3.7» или
+// честное «не удалось проверить». Зелёного «всё хорошо» без данных не бывает.
+function versionCell(el, part) {
+  if (!part) {
+    el.textContent = "—";
+    el.className = "";
+    return;
+  }
+  if (part.missing) {
+    el.textContent = "не установлен";
+    el.className = "warn";
+    return;
+  }
+  if (part.unknown) {
+    el.textContent = part.current ? `${part.current} · не удалось проверить` : "не удалось проверить";
+    el.className = "warn";
+    return;
+  }
+  if (part.outdated) {
+    el.textContent = `${part.current || "?"} → ${part.latest}`;
+    el.className = "warn";
+    return;
+  }
+  el.textContent = `${part.current} · актуально`;
+  el.className = "";
+}
+
+function renderUpdates() {
+  const u = state && state.updates;
+  const addonEl = $("#updAddon");
+  const helperEl = $("#updHelper");
+  const hint = $("#updHint");
+  const dl = $("#btnDownloadAddon");
+  if (!u) {
+    addonEl.textContent = "не проверялось";
+    addonEl.className = "";
+    helperEl.textContent = state && state.helperVersion ? `${state.helperVersion} · не проверялось` : "—";
+    helperEl.className = "";
+    hint.textContent = "Проверка идёт через хелпер: отдельного доступа к сети расширению не нужно.";
+    dl.hidden = true;
+    return;
+  }
+  versionCell(addonEl, u.addon);
+  versionCell(helperEl, u.helper);
+
+  const lines = [];
+  if (u.error) lines.push(`Проверить не удалось: ${u.error}.`);
+  if (u.helper && u.helper.missing && !u.error) lines.push("Хелпер не установлен — сравнивать нечего.");
+  if (u.addon && u.addon.outdated) lines.push("Аддон старее релиза: обновите .xpi из релиза.");
+  if (u.helper && u.helper.outdated) lines.push("Хелпер старее релиза — обновите его установщиком.");
+  if (!lines.length) lines.push("Всё актуально.");
+  hint.textContent = lines.join(" ");
+  dl.hidden = !(u.addon && u.addon.outdated && u.pageUrl);
 }
 
 function render() {
@@ -540,6 +596,29 @@ $("#installRecheck").addEventListener("click", async () => {
 
 $("#alertInstall").addEventListener("click", openInstallSheet);
 $("#btnInstall").addEventListener("click", openInstallSheet);
+
+$("#btnCheckUpdates").addEventListener("click", async () => {
+  const btn = $("#btnCheckUpdates");
+  btn.disabled = true;
+  btn.textContent = "Проверяю…";
+  try {
+    const res = await send("checkVersions", { force: true });
+    if (res && res.state) {
+      state = res.state;
+      render();
+    }
+    if (res && !res.ok) $("#updHint").textContent = "Проверить не удалось: " + (res.error || "нет ответа");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Проверить";
+  }
+});
+
+$("#btnDownloadAddon").addEventListener("click", () => {
+  const u = state && state.updates;
+  const url = (u && u.pageUrl) || "https://github.com/RoninOnis/amnezia-browser-vpn/releases/latest";
+  browser.tabs.create({ url });
+});
 
 browser.runtime.onMessage.addListener((msg) => {
   if (msg && msg.type === "state" && msg.payload) {
