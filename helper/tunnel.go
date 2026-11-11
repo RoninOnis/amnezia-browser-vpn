@@ -30,6 +30,8 @@ type Tunnel struct {
 	listener net.Listener
 	started  time.Time
 	mtuAuto  bool
+	portAuto bool
+	relay    *RelayClient
 
 	closeOnce sync.Once
 	closing   chan struct{}
@@ -49,26 +51,70 @@ type TunnelStatus struct {
 	UptimeSec     int64  `json:"uptimeSec"`
 	MTU           int    `json:"mtu,omitempty"`
 	MTUAuto       bool   `json:"mtuAuto,omitempty"`
+	PortAuto      bool   `json:"portAuto,omitempty"`
+	Relay         bool   `json:"relay,omitempty"`
 	Err           string `json:"error,omitempty"`
 }
 
-// handshakeWait — сколько ждём первый handshake на каждом шаге лестницы MTU.
-const handshakeWait = 8 * time.Second
+// handshakeWait — сколько ждём первый handshake на каждом шаге. Живой handshake
+// приходит за ~0.5 s, так что 4 s — с большим запасом, зато перебор
+// «порт × MTU» целиком укладывается в таймаут запроса из расширения.
+const handshakeWait = 4 * time.Second
 
-// MTULadder — значения MTU, которые пробуем по порядку. Корпоративные туннели
-// (AnyConnect держит 1400) молча роняют наши пакеты, если MTU профиля больше
-// полезной нагрузки, поэтому спускаемся вниз до первого handshake.
-func MTULadder(base int) []int {
-	if base <= 0 {
-		base = 1420
+// TunnelOptions — то, что приходит из расширения поверх профиля.
+type TunnelOptions struct {
+	MTUOverride  int    // >0 заменяет MTU профиля
+	PortOverride int    // >0 заменяет порт профиля
+	Auto         bool   // перебирать MTU/порт и, если задан, релей
+	RelayAddr    string // адрес нашего релея ("ip:443"); пусто — релей не нужен
+	RelayToken   string
+	RelayOnly    bool // не пробовать прямое подключение (для проверки релея)
+}
+
+// PortMtuAttempt — одна попытка подключения: куда и с каким MTU.
+type PortMtuAttempt struct {
+	Port int
+	MTU  int
+}
+
+// AttemptPlan строит порядок попыток. Логика из живых замеров: UDP наружу часто
+// разрешён только на 443 (QUIC), а корпоративный туннель заодно режет MTU до 1400.
+// Поэтому сначала штатный порт с MTU профиля — на нормальной сети это
+// единственная попытка, — затем понижение MTU, затем тот же перебор на 443.
+func AttemptPlan(port, mtu int, portFallback bool) []PortMtuAttempt {
+	if mtu <= 0 {
+		mtu = 1420
 	}
-	ladder := []int{base}
+	if port <= 0 {
+		port = 443
+	}
+	var out []PortMtuAttempt
+	seen := map[[2]int]bool{}
+	add := func(p, m int) {
+		if p <= 0 || m <= 0 || seen[[2]int{p, m}] {
+			return
+		}
+		seen[[2]int{p, m}] = true
+		out = append(out, PortMtuAttempt{Port: p, MTU: m})
+	}
+	lower := 0
 	for _, v := range []int{1280, 1240, 1200} {
-		if v < base {
-			ladder = append(ladder, v)
+		if v < mtu {
+			lower = v
+			break
 		}
 	}
-	return ladder
+	add(port, mtu)
+	if lower > 0 {
+		add(port, lower)
+	}
+	if portFallback && port != 443 {
+		add(443, mtu)
+		if lower > 0 {
+			add(443, lower)
+		}
+	}
+	return out
 }
 
 func b64ToHexKey(s string) (string, error) {
@@ -292,45 +338,100 @@ func (t *Tunnel) watchHandshake() {
 	}
 }
 
-// StartTunnelAuto поднимает туннель, при auto=true перебирая MTU вниз, пока не
-// появится handshake. Возвращает туннель и MTU, на котором получилось.
-func StartTunnelAuto(p *Profile, listen string, mtuOverride int, auto bool) (*Tunnel, error) {
+// StartTunnelAuto поднимает туннель, при auto перебирая пары (порт, MTU), пока не
+// появится handshake. portOverride > 0 заменяет порт из профиля.
+func StartTunnelAuto(p *Profile, listen string, opts TunnelOptions) (*Tunnel, error) {
 	prof := *p
-	if mtuOverride > 0 {
-		prof.MTU = mtuOverride
+	if opts.MTUOverride > 0 {
+		prof.MTU = opts.MTUOverride
 	}
-	if !auto {
+	if opts.PortOverride > 0 {
+		prof.Port = opts.PortOverride
+	}
+	if !opts.Auto {
 		return StartTunnel(&prof, listen)
 	}
+	basePort, baseMTU := prof.Port, prof.MTU
 	var lastErr error
-	for _, m := range MTULadder(prof.MTU) {
+	if opts.RelayOnly && opts.RelayAddr != "" {
+		return startViaRelay(&prof, listen, opts)
+	}
+	for _, a := range AttemptPlan(basePort, baseMTU, true) {
 		attempt := prof
-		attempt.MTU = m
+		attempt.Port = a.Port
+		attempt.MTU = a.MTU
 		tun, err := StartTunnel(&attempt, listen)
 		if err != nil {
-			lastErr = fmt.Errorf("mtu %d: %w", m, err)
+			lastErr = fmt.Errorf("port %d mtu %d: %w", a.Port, a.MTU, err)
 			continue
 		}
 		if tun.WaitHandshake(handshakeWait) {
 			tun.mtuAuto = true
-			if m != prof.MTU {
-				log.Printf("tunnel works with mtu %d instead of %d", m, prof.MTU)
+			tun.portAuto = a.Port != basePort
+			if a.Port != basePort || a.MTU != baseMTU {
+				log.Printf("tunnel works with port %d mtu %d (profile had port %d mtu %d)",
+					a.Port, a.MTU, basePort, baseMTU)
 			}
 			return tun, nil
 		}
-		log.Printf("no handshake with mtu %d in %s, trying lower", m, handshakeWait)
+		log.Printf("no handshake on port %d mtu %d in %s, next attempt", a.Port, a.MTU, handshakeWait)
 		tun.Close()
-		lastErr = fmt.Errorf("no handshake with mtu %d (UDP may be blocked)", m)
+		lastErr = fmt.Errorf("no handshake on port %d mtu %d (UDP may be blocked)", a.Port, a.MTU)
+	}
+
+	// Последняя попытка — через наш релей на 443/udp: сети, где разрешён только
+	// QUIC, иначе не пускают вообще ничего.
+	if opts.RelayAddr != "" {
+		tun, err := startViaRelay(&prof, listen, opts)
+		if err != nil {
+			log.Printf("relay attempt failed: %v", err)
+			lastErr = err
+		} else {
+			return tun, nil
+		}
 	}
 	if lastErr == nil {
-		lastErr = fmt.Errorf("no handshake on any MTU value")
+		lastErr = fmt.Errorf("no handshake on any port/MTU combination")
 	}
 	return nil, lastErr
+}
+
+// startViaRelay поднимает локальный порт релея и запускает туннель в него.
+func startViaRelay(prof *Profile, listen string, opts TunnelOptions) (*Tunnel, error) {
+	target := net.JoinHostPort(prof.Host, strconv.Itoa(prof.Port))
+	client, err := StartRelayClient(opts.RelayAddr, opts.RelayToken, target)
+	if err != nil {
+		return nil, err
+	}
+	rc := *prof
+	rc.Host, rc.Port = "127.0.0.1", client.conn.LocalAddr().(*net.UDPAddr).Port
+	// через релей идёт ещё один хоп, поэтому MTU берём с запасом
+	if rc.MTU > 1360 {
+		rc.MTU = 1280
+	}
+	log.Printf("trying relay %s -> %s (mtu %d)", opts.RelayAddr, target, rc.MTU)
+	tun, err := StartTunnel(&rc, listen)
+	if err != nil {
+		client.Close()
+		return nil, err
+	}
+	if !tun.WaitHandshake(handshakeWait) {
+		tun.Close()
+		client.Close()
+		return nil, fmt.Errorf("no handshake through relay %s", opts.RelayAddr)
+	}
+	tun.relay = client
+	tun.mtuAuto = true
+	log.Printf("tunnel works through relay %s -> %s (mtu %d)", opts.RelayAddr, target, rc.MTU)
+	return tun, nil
 }
 
 func (t *Tunnel) Close() {
 	t.closeOnce.Do(func() {
 		close(t.closing)
+		if t.relay != nil {
+			t.relay.Close()
+		}
 	})
 }
 
@@ -347,6 +448,8 @@ func (t *Tunnel) Status() TunnelStatus {
 		UptimeSec:   int64(time.Since(t.started).Seconds()),
 		MTU:         t.Profile.MTU,
 		MTUAuto:     t.mtuAuto,
+		PortAuto:    t.portAuto,
+		Relay:       t.relay != nil,
 	}
 	raw, err := t.dev.IpcGet()
 	if err != nil {

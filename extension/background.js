@@ -21,6 +21,10 @@ const DEFAULTS = {
   // поэтому при отсутствии handshake хелпер спускается вниз 1376 -> 1280 -> 1240 -> 1200.
   mtuAuto: true,
   mtu: 0,
+  // Релей на нашем сервере: нужен там, где наружу пускают только UDP 443 (QUIC).
+  // Токен выдаём вручную, чтобы релей не стал открытым прокси.
+  relayAddr: "",
+  relayToken: "",
   // Автостарт включён: «включено» = «хочу, чтобы работало всегда». Пока значение было false
   // по умолчанию, после перезапуска Firefox туннель никто не поднимал — жалоба «не стартует».
   autoConnect: true,
@@ -319,7 +323,14 @@ async function connectOnce() {
   const mtu = Number(state.settings.mtu) || 0;
   // при подборе MTU хелпер перебирает до четырёх значений по 8 с — ждём дольше
   const timeout = mtuAuto ? 60000 : 40000;
-  const resp = await sendNative("connect", { profile: profile.profile, listen, mtu, mtuAuto }, timeout);
+  const relayAddr = String(state.settings.relayAddr || "").trim();
+  const relayToken = String(state.settings.relayToken || "").trim();
+  const payload = { profile: profile.profile, listen, mtu, mtuAuto };
+  if (relayAddr) {
+    payload.relayAddr = relayAddr;
+    payload.relayToken = relayToken;
+  }
+  const resp = await sendNative("connect", payload, timeout);
   if (resp.ok && resp.status) {
     state.tunnel = { ...state.tunnel, ...normaliseStatus(resp.status) };
   } else {
@@ -369,6 +380,7 @@ function normaliseStatus(st) {
     uptimeSec: st.uptimeSec || 0,
     mtu: st.mtu || 0,
     mtuAuto: !!st.mtuAuto,
+    relay: !!st.relay,
   };
 }
 
@@ -492,6 +504,8 @@ browser.runtime.onMessage.addListener((msg) => {
         autoConnect: msg.autoConnect != null ? !!msg.autoConnect : state.settings.autoConnect,
         mtuAuto: msg.mtuAuto != null ? !!msg.mtuAuto : state.settings.mtuAuto,
         mtu: msg.mtu != null ? Number(msg.mtu) || 0 : state.settings.mtu,
+        relayAddr: msg.relayAddr != null ? String(msg.relayAddr).trim() : state.settings.relayAddr,
+        relayToken: msg.relayToken != null ? String(msg.relayToken).trim() : state.settings.relayToken,
         listenPort: msg.listenPort != null ? Number(msg.listenPort) || 0 : state.settings.listenPort,
       }).then(() => ({ ok: true, state: publicState() }));
     case "tabOverride": {

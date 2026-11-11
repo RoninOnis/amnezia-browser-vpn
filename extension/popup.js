@@ -245,6 +245,8 @@ function renderSettings() {
   const t = s.tunnel || {};
   $("#autoConnect").checked = !!s.autoConnect;
   $("#mtuAuto").checked = s.mtuAuto !== false;
+  $("#relayAddr").value = s.relayAddr || "";
+  $("#relayToken").value = s.relayToken || "";
   $("#listenPort").value = s.listenPort || 0;
   $("#helperMissingHint").textContent = s.helperMissing
     ? "Хелпер не найден. Кнопка «Установить хелпер» проведёт по шагам: скачать, открыть, запустить."
@@ -255,7 +257,7 @@ function renderSettings() {
   $("#hVersion").textContent = s.helperVersion || "—";
   $("#hSocks").textContent = t.socksPort ? `127.0.0.1:${t.socksPort}` : "—";
   $("#hMtu").textContent = t.mtu
-    ? `${t.mtu}${t.mtuAuto ? " (подобран под сеть)" : " (из профиля)"}`
+    ? `${t.mtu}${t.mtuAuto ? " (подобран под сеть)" : " (из профиля)"}${t.relay ? ", через релей" : ""}`
     : "—";
   const att = s.lastAttempt;
   $("#hAttempt").textContent = !att
@@ -423,6 +425,8 @@ $("#btnSavePrefs").addEventListener("click", async () => {
   const res = await send("savePrefs", {
     autoConnect: $("#autoConnect").checked,
     mtuAuto: $("#mtuAuto").checked,
+    relayAddr: $("#relayAddr").value.trim(),
+    relayToken: $("#relayToken").value.trim(),
     listenPort: Number($("#listenPort").value) || 0,
   });
   $("#prefsHint").textContent = res && res.ok ? "сохранено" : "ошибка: " + ((res && res.error) || "?");

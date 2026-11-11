@@ -14,18 +14,43 @@ import (
 
 var version = "dev"
 
+// waitForSignal блокирует до SIGINT/SIGTERM — используется режимом релея.
+func waitForSignal() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+	<-ch
+}
+
+// maskToken не даёт токену релея попасть в лог целиком.
+func maskToken(t string) string {
+	if t == "" {
+		return "(без токена)"
+	}
+	if len(t) <= 6 {
+		return "***"
+	}
+	return t[:4] + "***" + t[len(t)-2:]
+}
+
 func main() {
 	var (
-		daemonMode = flag.Bool("daemon", false, "run as the background helper daemon")
-		connectTo  = flag.String("connect", "", "profile to connect: vpn:// link, .conf file path or JSON file path")
-		listenAddr = flag.String("listen", "127.0.0.1:0", "SOCKS5 listen address (loopback only)")
-		foreground = flag.Bool("foreground", false, "keep the tunnel in the foreground (no daemon, for debugging)")
-		doStatus   = flag.Bool("status", false, "print daemon/tunnel status as JSON")
-		doStop     = flag.Bool("stop", false, "disconnect and stop the helper daemon")
-		dumpProf   = flag.String("dump-profile", "", "parse a vpn:// link / .conf and print the normalised profile JSON")
-		showVer    = flag.Bool("version", false, "print version")
-		mtuFlag    = flag.Int("mtu", 0, "override profile MTU (0 = use profile value)")
-		mtuAuto    = flag.Bool("mtu-auto", false, "walk MTU down (1376->1280->1240->1200) until a handshake appears")
+		daemonMode  = flag.Bool("daemon", false, "run as the background helper daemon")
+		connectTo   = flag.String("connect", "", "profile to connect: vpn:// link, .conf file path or JSON file path")
+		listenAddr  = flag.String("listen", "127.0.0.1:0", "SOCKS5 listen address (loopback only)")
+		foreground  = flag.Bool("foreground", false, "keep the tunnel in the foreground (no daemon, for debugging)")
+		doStatus    = flag.Bool("status", false, "print daemon/tunnel status as JSON")
+		doStop      = flag.Bool("stop", false, "disconnect and stop the helper daemon")
+		dumpProf    = flag.String("dump-profile", "", "parse a vpn:// link / .conf and print the normalised profile JSON")
+		showVer     = flag.Bool("version", false, "print version")
+		mtuFlag     = flag.Int("mtu", 0, "override profile MTU (0 = use profile value)")
+		mtuAuto     = flag.Bool("mtu-auto", false, "walk MTU down and retry on port 443 until a handshake appears")
+		portFlag    = flag.Int("port", 0, "override server UDP port (0 = use profile value)")
+		relayAddr   = flag.String("relay-addr", "", "relay address (\"host:443\") used as a last resort when UDP is filtered")
+		relayToken  = flag.String("relay-token", "", "relay auth token")
+		relayOnly   = flag.Bool("relay-only", false, "skip direct attempts and use only the relay")
+		relayServe  = flag.Bool("relay-serve", false, "run as a UDP relay (server side)")
+		relayListen = flag.String("relay-listen", "0.0.0.0:443", "relay listen address for --relay-serve")
+		relayAllow  = flag.String("relay-allow", "", "comma-separated allowed upstream targets for --relay-serve")
 	)
 	flag.Parse()
 
@@ -40,6 +65,23 @@ func main() {
 			log.Fatalf("profile: %v", err)
 		}
 		printJSON(prof)
+		return
+	}
+
+	if *relayServe {
+		allowed := map[string]bool{}
+		for _, t := range strings.Split(*relayAllow, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				allowed[t] = true
+			}
+		}
+		srv := &RelayServer{Addr: *relayListen, Token: *relayToken, Allowed: allowed}
+		if err := srv.Start(); err != nil {
+			log.Fatalf("relay: %v", err)
+		}
+		log.Printf("relay up, token %s, targets %v", maskToken(*relayToken), *relayAllow)
+		waitForSignal()
+		srv.Close()
 		return
 	}
 
@@ -66,7 +108,10 @@ func main() {
 		if err != nil {
 			log.Fatalf("profile: %v", err)
 		}
-		tun, err := StartTunnelAuto(prof, *listenAddr, *mtuFlag, *mtuAuto)
+		opts := TunnelOptions{MTUOverride: *mtuFlag, PortOverride: *portFlag,
+			Auto: *mtuAuto || *relayOnly, RelayAddr: *relayAddr, RelayToken: *relayToken,
+			RelayOnly: *relayOnly}
+		tun, err := StartTunnelAuto(prof, *listenAddr, opts)
 		if err != nil {
 			log.Fatalf("connect: %v", err)
 		}
@@ -93,7 +138,8 @@ func main() {
 			log.Fatalf("daemon: %v", err)
 		}
 		resp, err := call(request{Cmd: "connect", Profile: prof, Listen: *listenAddr,
-			MTU: *mtuFlag, MTUAuto: *mtuAuto})
+			MTU: *mtuFlag, MTUAuto: *mtuAuto, Port: *portFlag, PortFallback: *mtuAuto,
+			RelayAddr: *relayAddr, RelayToken: *relayToken})
 		if err != nil || resp == nil {
 			log.Fatalf("connect: %v", err)
 		}

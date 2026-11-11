@@ -30,9 +30,14 @@ type request struct {
 	Cmd     string   `json:"cmd"`
 	Profile *Profile `json:"profile,omitempty"`
 	Listen  string   `json:"listen,omitempty"`
-	// MTU > 0 переопределяет MTU из профиля; MTUAuto включает подбор MTU вниз.
-	MTU     int  `json:"mtu,omitempty"`
-	MTUAuto bool `json:"mtuAuto,omitempty"`
+	// MTU/Port > 0 переопределяют значения из профиля; MTUAuto/PortFallback
+	// включают подбор MTU вниз и запасной порт 443.
+	MTU          int    `json:"mtu,omitempty"`
+	MTUAuto      bool   `json:"mtuAuto,omitempty"`
+	Port         int    `json:"port,omitempty"`
+	PortFallback bool   `json:"portFallback,omitempty"`
+	RelayAddr    string `json:"relayAddr,omitempty"`
+	RelayToken   string `json:"relayToken,omitempty"`
 }
 
 type response struct {
@@ -232,7 +237,14 @@ func (d *Daemon) handle(conn net.Conn) {
 		}
 		prof := *req.Profile
 		prof.normalize()
-		tun, err := StartTunnelAuto(&prof, listen, req.MTU, req.MTUAuto)
+		opts := TunnelOptions{
+			MTUOverride:  req.MTU,
+			PortOverride: req.Port,
+			Auto:         req.MTUAuto || req.PortFallback || req.RelayAddr != "",
+			RelayAddr:    req.RelayAddr,
+			RelayToken:   req.RelayToken,
+		}
+		tun, err := StartTunnelAuto(&prof, listen, opts)
 		if err != nil {
 			d.lastErr = err.Error()
 			log.Printf("connect failed: %v", err)
