@@ -16,13 +16,15 @@ build() {
   echo "→ $goos/$goarch -> dist/$out"
   ( cd "$ROOT/helper" && \
     CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
-    go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$DIST/$out" . )
+    go build -trimpath -ldflags "-s -w -buildid= -X main.version=$VERSION" -o "$DIST/$out" . )
 }
 
-build linux   amd64 awgbv-linux-amd64
-build linux   arm64 awgbv-linux-arm64
-build windows amd64 awgbv-windows-amd64.exe
-build windows arm64 awgbv-windows-arm64.exe
+ARCHS="${ARCHS:-amd64}"
+
+for arch in $ARCHS; do
+  build linux   "$arch" "awgbv-linux-$arch"
+  build windows "$arch" "awgbv-windows-$arch.exe"
+done
 
 ( cd "$DIST" && sha256sum awgbv-* > SHA256SUMS )
 echo
