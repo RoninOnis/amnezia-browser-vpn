@@ -244,6 +244,7 @@ function renderSettings() {
   const s = state;
   const t = s.tunnel || {};
   $("#autoConnect").checked = !!s.autoConnect;
+  $("#mtuAuto").checked = s.mtuAuto !== false;
   $("#listenPort").value = s.listenPort || 0;
   $("#helperMissingHint").textContent = s.helperMissing
     ? "Хелпер не найден. Кнопка «Установить хелпер» проведёт по шагам: скачать, открыть, запустить."
@@ -253,6 +254,9 @@ function renderSettings() {
     : (t.running ? (t.state || "—") : "остановлен");
   $("#hVersion").textContent = s.helperVersion || "—";
   $("#hSocks").textContent = t.socksPort ? `127.0.0.1:${t.socksPort}` : "—";
+  $("#hMtu").textContent = t.mtu
+    ? `${t.mtu}${t.mtuAuto ? " (подобран под сеть)" : " (из профиля)"}`
+    : "—";
   const att = s.lastAttempt;
   $("#hAttempt").textContent = !att
     ? "—"
@@ -418,6 +422,7 @@ $("#btnClearList").addEventListener("click", async () => {
 $("#btnSavePrefs").addEventListener("click", async () => {
   const res = await send("savePrefs", {
     autoConnect: $("#autoConnect").checked,
+    mtuAuto: $("#mtuAuto").checked,
     listenPort: Number($("#listenPort").value) || 0,
   });
   $("#prefsHint").textContent = res && res.ok ? "сохранено" : "ошибка: " + ((res && res.error) || "?");

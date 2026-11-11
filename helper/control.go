@@ -30,6 +30,9 @@ type request struct {
 	Cmd     string   `json:"cmd"`
 	Profile *Profile `json:"profile,omitempty"`
 	Listen  string   `json:"listen,omitempty"`
+	// MTU > 0 переопределяет MTU из профиля; MTUAuto включает подбор MTU вниз.
+	MTU     int  `json:"mtu,omitempty"`
+	MTUAuto bool `json:"mtuAuto,omitempty"`
 }
 
 type response struct {
@@ -229,7 +232,7 @@ func (d *Daemon) handle(conn net.Conn) {
 		}
 		prof := *req.Profile
 		prof.normalize()
-		tun, err := StartTunnel(&prof, listen)
+		tun, err := StartTunnelAuto(&prof, listen, req.MTU, req.MTUAuto)
 		if err != nil {
 			d.lastErr = err.Error()
 			log.Printf("connect failed: %v", err)

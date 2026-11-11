@@ -24,6 +24,8 @@ func main() {
 		doStop     = flag.Bool("stop", false, "disconnect and stop the helper daemon")
 		dumpProf   = flag.String("dump-profile", "", "parse a vpn:// link / .conf and print the normalised profile JSON")
 		showVer    = flag.Bool("version", false, "print version")
+		mtuFlag    = flag.Int("mtu", 0, "override profile MTU (0 = use profile value)")
+		mtuAuto    = flag.Bool("mtu-auto", false, "walk MTU down (1376->1280->1240->1200) until a handshake appears")
 	)
 	flag.Parse()
 
@@ -64,7 +66,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("profile: %v", err)
 		}
-		tun, err := StartTunnel(prof, *listenAddr)
+		tun, err := StartTunnelAuto(prof, *listenAddr, *mtuFlag, *mtuAuto)
 		if err != nil {
 			log.Fatalf("connect: %v", err)
 		}
@@ -90,7 +92,8 @@ func main() {
 		if err := ensureDaemon(); err != nil {
 			log.Fatalf("daemon: %v", err)
 		}
-		resp, err := call(request{Cmd: "connect", Profile: prof, Listen: *listenAddr})
+		resp, err := call(request{Cmd: "connect", Profile: prof, Listen: *listenAddr,
+			MTU: *mtuFlag, MTUAuto: *mtuAuto})
 		if err != nil || resp == nil {
 			log.Fatalf("connect: %v", err)
 		}

@@ -29,6 +29,7 @@ type Tunnel struct {
 	tnet     *netstack.Net
 	listener net.Listener
 	started  time.Time
+	mtuAuto  bool
 
 	closeOnce sync.Once
 	closing   chan struct{}
@@ -46,7 +47,28 @@ type TunnelStatus struct {
 	RxBytes       int64  `json:"rxBytes"`
 	TxBytes       int64  `json:"txBytes"`
 	UptimeSec     int64  `json:"uptimeSec"`
+	MTU           int    `json:"mtu,omitempty"`
+	MTUAuto       bool   `json:"mtuAuto,omitempty"`
 	Err           string `json:"error,omitempty"`
+}
+
+// handshakeWait — сколько ждём первый handshake на каждом шаге лестницы MTU.
+const handshakeWait = 8 * time.Second
+
+// MTULadder — значения MTU, которые пробуем по порядку. Корпоративные туннели
+// (AnyConnect держит 1400) молча роняют наши пакеты, если MTU профиля больше
+// полезной нагрузки, поэтому спускаемся вниз до первого handshake.
+func MTULadder(base int) []int {
+	if base <= 0 {
+		base = 1420
+	}
+	ladder := []int{base}
+	for _, v := range []int{1280, 1240, 1200} {
+		if v < base {
+			ladder = append(ladder, v)
+		}
+	}
+	return ladder
 }
 
 func b64ToHexKey(s string) (string, error) {
@@ -191,6 +213,7 @@ func StartTunnel(p *Profile, listen string) (*Tunnel, error) {
 		tnet:      tnet,
 		listener:  ln,
 		started:   time.Now(),
+		mtuAuto:   false,
 		closing:   make(chan struct{}),
 	}
 	go func() {
@@ -198,8 +221,111 @@ func StartTunnel(p *Profile, listen string) (*Tunnel, error) {
 		ln.Close()
 		dev.Close()
 	}()
-	log.Printf("tunnel up: %s -> %s, socks5 127.0.0.1:%d", p.ClientIP, p.Endpoint(), port)
+	log.Printf("tunnel up: %s -> %s, mtu %d, socks5 127.0.0.1:%d", p.ClientIP, p.Endpoint(), p.MTU, port)
+	go t.watchHandshake()
 	return t, nil
+}
+
+// hasHandshake reports whether the peer has completed at least one handshake.
+func (t *Tunnel) hasHandshake() bool {
+	raw, err := t.dev.IpcGet()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(raw, "\n") {
+		if v, ok := strings.CutPrefix(line, "last_handshake_time_sec="); ok {
+			if n, _ := strconv.ParseInt(v, 10, 64); n > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// WaitHandshake blocks until the first handshake arrives or the timeout passes.
+func (t *Tunnel) WaitHandshake(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if t.hasHandshake() {
+			return true
+		}
+		select {
+		case <-t.closing:
+			return false
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	return false
+}
+
+// watchHandshake writes the outcome of the first handshake to the log. Раньше
+// лог молчал об этом, и по нему нельзя было отличить «туннель поднялся» от
+// «пакеты уходят в никуда».
+func (t *Tunnel) watchHandshake() {
+	start := time.Now()
+	warned := false
+	for {
+		select {
+		case <-t.closing:
+			return
+		default:
+		}
+		if t.hasHandshake() {
+			log.Printf("handshake ok after %s (mtu %d, endpoint %s)",
+				time.Since(start).Round(time.Millisecond), t.Profile.MTU, t.Profile.Endpoint())
+			return
+		}
+		elapsed := time.Since(start)
+		st := t.Status()
+		if !warned && elapsed > 15*time.Second {
+			warned = true
+			log.Printf("WARNING: no handshake in 15s (endpoint %s, mtu %d, tx=%d rx=%d) — "+
+				"похоже, UDP не проходит или MTU слишком большой",
+				t.Profile.Endpoint(), t.Profile.MTU, st.TxBytes, st.RxBytes)
+		}
+		if elapsed > 60*time.Second {
+			log.Printf("WARNING: still no handshake after 60s (endpoint %s, mtu %d)",
+				t.Profile.Endpoint(), t.Profile.MTU)
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// StartTunnelAuto поднимает туннель, при auto=true перебирая MTU вниз, пока не
+// появится handshake. Возвращает туннель и MTU, на котором получилось.
+func StartTunnelAuto(p *Profile, listen string, mtuOverride int, auto bool) (*Tunnel, error) {
+	prof := *p
+	if mtuOverride > 0 {
+		prof.MTU = mtuOverride
+	}
+	if !auto {
+		return StartTunnel(&prof, listen)
+	}
+	var lastErr error
+	for _, m := range MTULadder(prof.MTU) {
+		attempt := prof
+		attempt.MTU = m
+		tun, err := StartTunnel(&attempt, listen)
+		if err != nil {
+			lastErr = fmt.Errorf("mtu %d: %w", m, err)
+			continue
+		}
+		if tun.WaitHandshake(handshakeWait) {
+			tun.mtuAuto = true
+			if m != prof.MTU {
+				log.Printf("tunnel works with mtu %d instead of %d", m, prof.MTU)
+			}
+			return tun, nil
+		}
+		log.Printf("no handshake with mtu %d in %s, trying lower", m, handshakeWait)
+		tun.Close()
+		lastErr = fmt.Errorf("no handshake with mtu %d (UDP may be blocked)", m)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no handshake on any MTU value")
+	}
+	return nil, lastErr
 }
 
 func (t *Tunnel) Close() {
@@ -219,6 +345,8 @@ func (t *Tunnel) Status() TunnelStatus {
 		Endpoint:    t.Profile.Endpoint(),
 		Interface:   t.Profile.ClientIP,
 		UptimeSec:   int64(time.Since(t.started).Seconds()),
+		MTU:         t.Profile.MTU,
+		MTUAuto:     t.mtuAuto,
 	}
 	raw, err := t.dev.IpcGet()
 	if err != nil {

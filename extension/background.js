@@ -17,6 +17,10 @@ const SETTINGS_VERSION = 2;
 
 const DEFAULTS = {
   enabled: false,
+  // Подбор MTU: корпоративные туннели (AnyConnect держит 1400) режут наши пакеты,
+  // поэтому при отсутствии handshake хелпер спускается вниз 1376 -> 1280 -> 1240 -> 1200.
+  mtuAuto: true,
+  mtu: 0,
   // Автостарт включён: «включено» = «хочу, чтобы работало всегда». Пока значение было false
   // по умолчанию, после перезапуска Firefox туннель никто не поднимал — жалоба «не стартует».
   autoConnect: true,
@@ -311,7 +315,11 @@ async function connectOnce() {
   const listen = state.settings.listenPort
     ? `127.0.0.1:${state.settings.listenPort}`
     : "127.0.0.1:0";
-  const resp = await sendNative("connect", { profile: profile.profile, listen }, 40000);
+  const mtuAuto = !!state.settings.mtuAuto;
+  const mtu = Number(state.settings.mtu) || 0;
+  // при подборе MTU хелпер перебирает до четырёх значений по 8 с — ждём дольше
+  const timeout = mtuAuto ? 60000 : 40000;
+  const resp = await sendNative("connect", { profile: profile.profile, listen, mtu, mtuAuto }, timeout);
   if (resp.ok && resp.status) {
     state.tunnel = { ...state.tunnel, ...normaliseStatus(resp.status) };
   } else {
@@ -359,6 +367,8 @@ function normaliseStatus(st) {
     rxBytes: st.rxBytes || 0,
     txBytes: st.txBytes || 0,
     uptimeSec: st.uptimeSec || 0,
+    mtu: st.mtu || 0,
+    mtuAuto: !!st.mtuAuto,
   };
 }
 
@@ -480,6 +490,8 @@ browser.runtime.onMessage.addListener((msg) => {
     case "savePrefs":
       return saveSettings({
         autoConnect: msg.autoConnect != null ? !!msg.autoConnect : state.settings.autoConnect,
+        mtuAuto: msg.mtuAuto != null ? !!msg.mtuAuto : state.settings.mtuAuto,
+        mtu: msg.mtu != null ? Number(msg.mtu) || 0 : state.settings.mtu,
         listenPort: msg.listenPort != null ? Number(msg.listenPort) || 0 : state.settings.listenPort,
       }).then(() => ({ ok: true, state: publicState() }));
     case "tabOverride": {
