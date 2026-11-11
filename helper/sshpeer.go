@@ -204,6 +204,27 @@ func (c *SSHClient) Run(cmd string) (string, error) {
 	return text, nil
 }
 
+// RunStdout выполняет команду и возвращает ТОЛЬКО stdout: ответы awgbv-peer —
+// это JSON, и подмешанная диагностика из stderr сломала бы разбор.
+func (c *SSHClient) RunStdout(cmd string) (string, error) {
+	session, err := c.conn.NewSession()
+	if err != nil {
+		return "", err
+	}
+	defer session.Close()
+	var out, errb bytes.Buffer
+	session.Stdout = &out
+	session.Stderr = &errb
+	if err := session.Run(cmd); err != nil {
+		msg := strings.TrimSpace(errb.String())
+		if msg == "" {
+			msg = strings.TrimSpace(out.String())
+		}
+		return out.String(), fmt.Errorf("команда завершилась ошибкой (%v): %s", err, firstLines(msg, 3))
+	}
+	return out.String(), nil
+}
+
 // RunScript отправляет скрипт на stdin `bash -s`. Так бутстрап не зависит от
 // кавычек в шелле и не упирается в длину командной строки.
 func (c *SSHClient) RunScript(script string) (string, error) {
