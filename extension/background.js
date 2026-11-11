@@ -50,6 +50,7 @@ const state = {
   lastAttempt: null,
   retryDelay: 15000,
   nextRetryAt: 0,
+  connecting: false, // идёт connect: второй параллельно не запускаем
 };
 
 const HOST_MISSING = /no such native application|native application .* not found|No such native/i;
@@ -295,6 +296,19 @@ function publicState() {
 /* -------------------------------------------------------------- operations */
 
 async function doConnect() {
+  // Не запускаем второе подключение поверх первого: хелпер перебирает порт × MTU,
+  // это до 16 секунд, и раньше сторож успевал начать всё заново, обрывая перебор
+  // до попытки на 443. Клиенту это выглядело как «подключается и ничего не происходит».
+  if (state.connecting) return { skipped: "in-flight" };
+  state.connecting = true;
+  try {
+    return await doConnectInner();
+  } finally {
+    state.connecting = false;
+  }
+}
+
+async function doConnectInner() {
   // Первая попытка может попасть в момент, когда демон ещё поднимается (особенно на Windows
   // после перезагрузки). Один короткий повтор снимает жалобу «заводится только со второго раза».
   const first = await connectOnce();
@@ -339,7 +353,9 @@ async function ensureTunnel() {
   const s = state.settings;
   if (!s.enabled || !s.autoConnect) return { skipped: "off" };
   if (!activeProfile()) return { skipped: "no-profile" };
-  if (state.tunnel.running) {
+  // «connecting» — это тоже «работает»: хелпер прямо сейчас перебирает порт и MTU.
+  // Если считать это за простой, сторож запускает новое подключение и обрывает перебор.
+  if (state.tunnel.running || state.tunnel.state === "connecting" || state.connecting) {
     state.retryDelay = 15000;
     state.nextRetryAt = 0;
     return { skipped: "running" };

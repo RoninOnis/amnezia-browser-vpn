@@ -149,6 +149,28 @@ test("во время отсрочки сторож не долбит серве
   assert.deepEqual(plain(await ev(ctx, "ensureTunnel()")), { skipped: "backoff" });
 });
 
+test("пока хелпер перебирает порт и MTU, сторож не запускает второе подключение", async () => {
+  // Живой лог клиента: переподключение каждые 12 с и ни одной попытки на 443.
+  // Сторож считал «connecting» за простой и обрывал перебор в самом начале.
+  const ctx = await bootBackground();
+  await ev(ctx, PROFILE);
+  await ev(ctx, 'state.tunnel = { running: false, state: "connecting" };');
+  await ev(ctx, "globalThis.__calls = 0; doConnect = async () => { globalThis.__calls++; return { ok: true }; };");
+  assert.deepEqual(plain(await ev(ctx, "ensureTunnel()")), { skipped: "running" });
+  assert.equal(ev(ctx, "globalThis.__calls"), 0, "перебор нельзя прерывать");
+});
+
+test("второй doConnect не запускается, пока первый не закончил", async () => {
+  const ctx = await bootBackground();
+  await ev(ctx, PROFILE);
+  await ev(ctx, `globalThis.__calls = 0;
+    doConnectInner = async () => { globalThis.__calls++; await new Promise(r => setTimeout(r, 30)); return { ok: true }; };`);
+  const both = await ev(ctx, "Promise.all([doConnect(), doConnect(), doConnect()])");
+  assert.equal(ev(ctx, "globalThis.__calls"), 1, "параллельные connect недопустимы");
+  const skipped = plain(both).filter((r) => r && r.skipped === "in-flight");
+  assert.equal(skipped.length, 2, "лишние вызовы должны быть отброшены");
+});
+
 test("явное включение сбрасывает отсрочку сторожа", async () => {
   const ctx = await bootBackground();
   await ev(ctx, PROFILE);

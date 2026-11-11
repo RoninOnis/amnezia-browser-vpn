@@ -13,10 +13,23 @@ func pairs(attempts []PortMtuAttempt) [][2]int {
 	return out
 }
 
-// Порядок попыток: свой порт с MTU профиля, понижение MTU, затем то же на 443.
-func TestAttemptPlanNormalNetwork(t *testing.T) {
-	got := pairs(AttemptPlan(37689, 1376, true))
-	want := [][2]int{{37689, 1376}, {37689, 1280}, {443, 1376}, {443, 1280}}
+// Порядок попыток. Ключевое: 443 идёт ВТОРЫМ шагом, сразу после штатного порта с
+// MTU профиля. Раньше 443 стоял после всей лестницы MTU, и в сети, где штатный
+// порт закрыт, до него доходило только через 16 секунд — расширение успевало
+// сдаться и перезапустить подключение раньше.
+func TestAttemptPlanFallbackRightAfterProfilePort(t *testing.T) {
+	got := pairs(AttemptPlan(37689, 1376, true, true))
+	want := [][2]int{{37689, 1376}, {443, 1376}, {37689, 1280}, {443, 1280}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("AttemptPlan = %v, want %v", got, want)
+	}
+}
+
+// Без перебора MTU, но с запасным портом: ровно две попытки. Это путь, которым
+// идёт расширение, если подбор MTU выключен, — и он обязан доходить до 443.
+func TestAttemptPlanFallbackWithoutLadder(t *testing.T) {
+	got := pairs(AttemptPlan(36853, 1280, false, true))
+	want := [][2]int{{36853, 1280}, {443, 1280}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("AttemptPlan = %v, want %v", got, want)
 	}
@@ -24,7 +37,7 @@ func TestAttemptPlanNormalNetwork(t *testing.T) {
 
 // Профиль уже на 443 — дублировать не надо.
 func TestAttemptPlanNoDuplicateOn443(t *testing.T) {
-	got := pairs(AttemptPlan(443, 1376, true))
+	got := pairs(AttemptPlan(443, 1376, true, true))
 	want := [][2]int{{443, 1376}, {443, 1280}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("AttemptPlan = %v, want %v", got, want)
@@ -33,8 +46,17 @@ func TestAttemptPlanNoDuplicateOn443(t *testing.T) {
 
 // Запасной порт можно выключить — тогда только свой порт.
 func TestAttemptPlanFallbackOff(t *testing.T) {
-	got := pairs(AttemptPlan(36853, 1420, false))
+	got := pairs(AttemptPlan(36853, 1420, true, false))
 	want := [][2]int{{36853, 1420}, {36853, 1280}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("AttemptPlan = %v, want %v", got, want)
+	}
+}
+
+// Совсем без перебора и без запасного порта — одна попытка, как в старом поведении.
+func TestAttemptPlanSingleAttempt(t *testing.T) {
+	got := pairs(AttemptPlan(36853, 1280, false, false))
+	want := [][2]int{{36853, 1280}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("AttemptPlan = %v, want %v", got, want)
 	}
@@ -42,7 +64,7 @@ func TestAttemptPlanFallbackOff(t *testing.T) {
 
 // MTU уже маленький — понижать некуда, порт всё равно проверяем.
 func TestAttemptPlanSmallMtu(t *testing.T) {
-	got := pairs(AttemptPlan(36853, 1200, true))
+	got := pairs(AttemptPlan(36853, 1200, true, true))
 	want := [][2]int{{36853, 1200}, {443, 1200}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("AttemptPlan = %v, want %v", got, want)
@@ -51,7 +73,7 @@ func TestAttemptPlanSmallMtu(t *testing.T) {
 
 // Пустые значения подставляются разумными: порт 443, MTU 1420.
 func TestAttemptPlanDefaults(t *testing.T) {
-	got := pairs(AttemptPlan(0, 0, true))
+	got := pairs(AttemptPlan(0, 0, true, true))
 	want := [][2]int{{443, 1420}, {443, 1280}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("AttemptPlan = %v, want %v", got, want)
@@ -60,16 +82,16 @@ func TestAttemptPlanDefaults(t *testing.T) {
 
 // Первая попытка всегда ровно та, что в профиле: на нормальной сети ничего не меняется.
 func TestAttemptPlanStartsFromProfile(t *testing.T) {
-	first := AttemptPlan(37689, 1376, true)[0]
+	first := AttemptPlan(37689, 1376, true, true)[0]
 	if first.Port != 37689 || first.MTU != 1376 {
 		t.Fatalf("первая попытка %+v, ожидалась 37689/1376", first)
 	}
 }
 
 // Попыток не больше четырёх: иначе перебор не влезет в таймаут расширения
-// при handshakeWait = 4 s.
+// при handshakeWait = 4 s (4 × 4 s = 16 s, таймаут 60 s).
 func TestAttemptPlanBounded(t *testing.T) {
-	if n := len(AttemptPlan(37689, 1420, true)); n > 4 {
+	if n := len(AttemptPlan(37689, 1420, true, true)); n > 4 {
 		t.Fatalf("попыток %d, ожидалось не больше 4", n)
 	}
 }

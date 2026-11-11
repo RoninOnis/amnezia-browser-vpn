@@ -17,10 +17,16 @@ import (
 const maxNMMessage = 32 << 20
 
 type nmMessage struct {
-	ID      int64    `json:"id,omitempty"`
-	Cmd     string   `json:"cmd"`
-	Profile *Profile `json:"profile,omitempty"`
-	Listen  string   `json:"listen,omitempty"`
+	ID           int64    `json:"id,omitempty"`
+	Cmd          string   `json:"cmd"`
+	Profile      *Profile `json:"profile,omitempty"`
+	Listen       string   `json:"listen,omitempty"`
+	MTU          int      `json:"mtu,omitempty"`
+	MTUAuto      bool     `json:"mtuAuto,omitempty"`
+	Port         int      `json:"port,omitempty"`
+	PortFallback *bool    `json:"portFallback,omitempty"`
+	RelayAddr    string   `json:"relayAddr,omitempty"`
+	RelayToken   string   `json:"relayToken,omitempty"`
 }
 
 type nmReply struct {
@@ -132,7 +138,21 @@ func handleNM(msg nmMessage) nmReply {
 				reply.OK, reply.Error = false, err.Error()
 				return reply
 			}
-			resp, err = call(request{Cmd: "connect", Profile: msg.Profile, Listen: msg.Listen})
+			// ВАЖНО: пересылаем все поля запроса, а не только профиль и listen.
+			// Раньше mtuAuto/mtu/port/portFallback терялись здесь, и демон всегда
+			// шёл без авто-режима: перебор MTU и попытка на 443 не выполнялись
+			// никогда, хотя расширение их просило.
+			resp, err = call(request{
+				Cmd:          "connect",
+				Profile:      msg.Profile,
+				Listen:       msg.Listen,
+				MTU:          msg.MTU,
+				MTUAuto:      msg.MTUAuto,
+				Port:         msg.Port,
+				PortFallback: msg.PortFallback,
+				RelayAddr:    msg.RelayAddr,
+				RelayToken:   msg.RelayToken,
+			})
 			if err != nil {
 				reply.OK, reply.Error = false, err.Error()
 				return reply

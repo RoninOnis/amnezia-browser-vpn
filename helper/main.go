@@ -34,24 +34,25 @@ func maskToken(t string) string {
 
 func main() {
 	var (
-		daemonMode  = flag.Bool("daemon", false, "run as the background helper daemon")
-		connectTo   = flag.String("connect", "", "profile to connect: vpn:// link, .conf file path or JSON file path")
-		listenAddr  = flag.String("listen", "127.0.0.1:0", "SOCKS5 listen address (loopback only)")
-		foreground  = flag.Bool("foreground", false, "keep the tunnel in the foreground (no daemon, for debugging)")
-		doStatus    = flag.Bool("status", false, "print daemon/tunnel status as JSON")
-		doStop      = flag.Bool("stop", false, "disconnect and stop the helper daemon")
-		dumpProf    = flag.String("dump-profile", "", "parse a vpn:// link / .conf and print the normalised profile JSON")
-		showVer     = flag.Bool("version", false, "print version")
-		mtuFlag     = flag.Int("mtu", 0, "override profile MTU (0 = use profile value)")
-		mtuAuto     = flag.Bool("mtu-auto", false, "walk MTU down and retry on port 443 until a handshake appears")
-		portFlag    = flag.Int("port", 0, "override server UDP port (0 = use profile value)")
-		relayAddr   = flag.String("relay-addr", "", "relay address (\"host:443\") used as a last resort when UDP is filtered")
-		relayToken  = flag.String("relay-token", "", "relay auth token")
-		relayOnly   = flag.Bool("relay-only", false, "skip direct attempts and use only the relay")
-		relayServe  = flag.Bool("relay-serve", false, "run as a UDP relay (server side)")
-		relayListen = flag.String("relay-listen", "0.0.0.0:443", "relay listen address for --relay-serve")
-		relayAllow  = flag.String("relay-allow", "", "comma-separated allowed upstream targets for --relay-serve")
-		relayTarget = flag.String("relay-target", "", "fixed local target for --relay-serve (\"127.0.0.1:36853\"), typically the AWG port on the same host")
+		daemonMode   = flag.Bool("daemon", false, "run as the background helper daemon")
+		connectTo    = flag.String("connect", "", "profile to connect: vpn:// link, .conf file path or JSON file path")
+		listenAddr   = flag.String("listen", "127.0.0.1:0", "SOCKS5 listen address (loopback only)")
+		foreground   = flag.Bool("foreground", false, "keep the tunnel in the foreground (no daemon, for debugging)")
+		doStatus     = flag.Bool("status", false, "print daemon/tunnel status as JSON")
+		doStop       = flag.Bool("stop", false, "disconnect and stop the helper daemon")
+		dumpProf     = flag.String("dump-profile", "", "parse a vpn:// link / .conf and print the normalised profile JSON")
+		showVer      = flag.Bool("version", false, "print version")
+		mtuFlag      = flag.Int("mtu", 0, "override profile MTU (0 = use profile value)")
+		mtuAuto      = flag.Bool("mtu-auto", false, "walk MTU down until a handshake appears")
+		portFallback = flag.Bool("port-fallback", false, "additionally try port 443 (server-side satellite, QUIC-only networks)")
+		portFlag     = flag.Int("port", 0, "override server UDP port (0 = use profile value)")
+		relayAddr    = flag.String("relay-addr", "", "relay address (\"host:443\") used as a last resort when UDP is filtered")
+		relayToken   = flag.String("relay-token", "", "relay auth token")
+		relayOnly    = flag.Bool("relay-only", false, "skip direct attempts and use only the relay")
+		relayServe   = flag.Bool("relay-serve", false, "run as a UDP relay (server side)")
+		relayListen  = flag.String("relay-listen", "0.0.0.0:443", "relay listen address for --relay-serve")
+		relayAllow   = flag.String("relay-allow", "", "comma-separated allowed upstream targets for --relay-serve")
+		relayTarget  = flag.String("relay-target", "", "fixed local target for --relay-serve (\"127.0.0.1:36853\"), typically the AWG port on the same host")
 	)
 	flag.Parse()
 
@@ -114,8 +115,8 @@ func main() {
 			log.Fatalf("profile: %v", err)
 		}
 		opts := TunnelOptions{MTUOverride: *mtuFlag, PortOverride: *portFlag,
-			Auto: *mtuAuto || *relayOnly, RelayAddr: *relayAddr, RelayToken: *relayToken,
-			RelayOnly: *relayOnly}
+			Auto: *mtuAuto || *relayOnly, PortFallback: *mtuAuto || *portFallback,
+			RelayAddr: *relayAddr, RelayToken: *relayToken, RelayOnly: *relayOnly}
 		tun, err := StartTunnelAuto(prof, *listenAddr, opts)
 		if err != nil {
 			log.Fatalf("connect: %v", err)
@@ -142,8 +143,9 @@ func main() {
 		if err := ensureDaemon(); err != nil {
 			log.Fatalf("daemon: %v", err)
 		}
+		fallback := *portFallback || *mtuAuto
 		resp, err := call(request{Cmd: "connect", Profile: prof, Listen: *listenAddr,
-			MTU: *mtuFlag, MTUAuto: *mtuAuto, Port: *portFlag, PortFallback: *mtuAuto,
+			MTU: *mtuFlag, MTUAuto: *mtuAuto, Port: *portFlag, PortFallback: &fallback,
 			RelayAddr: *relayAddr, RelayToken: *relayToken})
 		if err != nil || resp == nil {
 			log.Fatalf("connect: %v", err)

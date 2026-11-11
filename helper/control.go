@@ -30,12 +30,15 @@ type request struct {
 	Cmd     string   `json:"cmd"`
 	Profile *Profile `json:"profile,omitempty"`
 	Listen  string   `json:"listen,omitempty"`
+	// PortFallback сознательно не выключается ничем, кроме явного portFallback:false
+	// в запросе: попытка на 443 стоит 4 секунды и только тогда, когда штатный порт
+	// уже не ответил. Именно она спасает в сетях, где наружу пускают только QUIC.
 	// MTU/Port > 0 переопределяют значения из профиля; MTUAuto/PortFallback
 	// включают подбор MTU вниз и запасной порт 443.
 	MTU          int    `json:"mtu,omitempty"`
 	MTUAuto      bool   `json:"mtuAuto,omitempty"`
 	Port         int    `json:"port,omitempty"`
-	PortFallback bool   `json:"portFallback,omitempty"`
+	PortFallback *bool  `json:"portFallback,omitempty"`
 	RelayAddr    string `json:"relayAddr,omitempty"`
 	RelayToken   string `json:"relayToken,omitempty"`
 }
@@ -69,12 +72,13 @@ func lockPath() string    { return filepath.Join(stateDir(), "daemon.lock") }
 
 // Daemon serves the control protocol and owns at most one tunnel.
 type Daemon struct {
-	mu      sync.Mutex
-	tunnel  *Tunnel
-	lastErr string
-	listen  string
-	ln      net.Listener
-	token   string
+	mu         sync.Mutex
+	tunnel     *Tunnel
+	connecting bool // идёт перебор попыток: новый connect не должен его обрывать
+	lastErr    string
+	listen     string
+	ln         net.Listener
+	token      string
 }
 
 func readControl() (*controlFile, error) {
@@ -191,6 +195,12 @@ func RunDaemon() error {
 
 func (d *Daemon) statusLocked() *TunnelStatus {
 	if d.tunnel == nil {
+		// Пока идёт перебор попыток, туннеля ещё нет, но это НЕ «stopped»:
+		// иначе расширение считает, что всё упало, и запускает новое подключение,
+		// обрывая текущую попытку. Именно так терялась попытка на 443.
+		if d.connecting {
+			return &TunnelStatus{Running: false, State: "connecting", Err: d.lastErr}
+		}
 		return &TunnelStatus{Running: false, State: "stopped", Err: d.lastErr}
 	}
 	st := d.tunnel.Status()
@@ -214,6 +224,14 @@ func (d *Daemon) handle(conn net.Conn) {
 		return
 	}
 
+	if req.Cmd == "connect" {
+		// Connect длится до нескольких секунд (перебор порт × MTU) — держать
+		// мьютекс всё это время нельзя: опрос статуса встанет в очередь, а
+		// расширение решит, что хелпер завис.
+		d.handleConnect(conn, req)
+		return
+	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -222,38 +240,8 @@ func (d *Daemon) handle(conn net.Conn) {
 		writeResp(conn, response{OK: true})
 	case "status":
 		writeResp(conn, response{OK: true, Status: d.statusLocked()})
-	case "connect":
-		if req.Profile == nil {
-			writeResp(conn, response{OK: false, Error: "no profile"})
-			return
-		}
-		if d.tunnel != nil {
-			d.tunnel.Close()
-			d.tunnel = nil
-		}
-		listen := req.Listen
-		if listen == "" {
-			listen = "127.0.0.1:0"
-		}
-		prof := *req.Profile
-		prof.normalize()
-		opts := TunnelOptions{
-			MTUOverride:  req.MTU,
-			PortOverride: req.Port,
-			Auto:         req.MTUAuto || req.PortFallback || req.RelayAddr != "",
-			RelayAddr:    req.RelayAddr,
-			RelayToken:   req.RelayToken,
-		}
-		tun, err := StartTunnelAuto(&prof, listen, opts)
-		if err != nil {
-			d.lastErr = err.Error()
-			log.Printf("connect failed: %v", err)
-			writeResp(conn, response{OK: false, Error: err.Error()})
-			return
-		}
-		d.tunnel = tun
-		d.lastErr = ""
-		writeResp(conn, response{OK: true, Status: ptr(tun.Status())})
+	case "connect": // обрабатывается в handleConnect, сюда не попадает
+		writeResp(conn, response{OK: false, Error: "internal: connect handled elsewhere"})
 	case "disconnect":
 		if d.tunnel != nil {
 			d.tunnel.Close()
@@ -273,6 +261,64 @@ func (d *Daemon) handle(conn net.Conn) {
 	default:
 		writeResp(conn, response{OK: false, Error: "unknown cmd " + req.Cmd})
 	}
+}
+
+// handleConnect поднимает туннель, не удерживая мьютекс на всё время перебора.
+// Пока попытки идут, статус отвечает «connecting», а повторный connect не
+// перезапускает перебор — иначе расширение, видя «не подключено», каждые 12 с
+// начинало всё заново и до попытки на 443 дело не доходило.
+func (d *Daemon) handleConnect(conn net.Conn, req request) {
+	if req.Profile == nil {
+		writeResp(conn, response{OK: false, Error: "no profile"})
+		return
+	}
+
+	d.mu.Lock()
+	if d.connecting {
+		st := d.statusLocked()
+		d.mu.Unlock()
+		writeResp(conn, response{OK: true, Status: st})
+		return
+	}
+	d.connecting = true
+	if d.tunnel != nil {
+		d.tunnel.Close()
+		d.tunnel = nil
+	}
+	d.mu.Unlock()
+
+	listen := req.Listen
+	if listen == "" {
+		listen = "127.0.0.1:0"
+	}
+	prof := *req.Profile
+	prof.normalize()
+	opts := TunnelOptions{
+		MTUOverride:  req.MTU,
+		PortOverride: req.Port,
+		Auto:         req.MTUAuto,                                  // перебор MTU — только если просили
+		PortFallback: req.PortFallback == nil || *req.PortFallback, // 443 пробуем по умолчанию
+		RelayAddr:    req.RelayAddr,
+		RelayToken:   req.RelayToken,
+	}
+
+	tun, err := StartTunnelAuto(&prof, listen, opts)
+
+	d.mu.Lock()
+	d.connecting = false
+	if err != nil {
+		d.lastErr = err.Error()
+		st := d.statusLocked()
+		d.mu.Unlock()
+		log.Printf("connect failed: %v", err)
+		writeResp(conn, response{OK: false, Error: err.Error(), Status: st})
+		return
+	}
+	d.tunnel = tun
+	d.lastErr = ""
+	st := d.statusLocked()
+	d.mu.Unlock()
+	writeResp(conn, response{OK: true, Status: st})
 }
 
 func writeResp(conn net.Conn, resp response) {

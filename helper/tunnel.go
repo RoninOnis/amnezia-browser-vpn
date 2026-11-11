@@ -65,7 +65,8 @@ const handshakeWait = 4 * time.Second
 type TunnelOptions struct {
 	MTUOverride  int    // >0 заменяет MTU профиля
 	PortOverride int    // >0 заменяет порт профиля
-	Auto         bool   // перебирать MTU/порт и, если задан, релей
+	Auto         bool   // перебирать MTU вниз
+	PortFallback bool   // пробовать 443, если штатный порт не ответил
 	RelayAddr    string // адрес нашего релея ("ip:443"); пусто — релей не нужен
 	RelayToken   string
 	RelayOnly    bool // не пробовать прямое подключение (для проверки релея)
@@ -81,7 +82,7 @@ type PortMtuAttempt struct {
 // разрешён только на 443 (QUIC), а корпоративный туннель заодно режет MTU до 1400.
 // Поэтому сначала штатный порт с MTU профиля — на нормальной сети это
 // единственная попытка, — затем понижение MTU, затем тот же перебор на 443.
-func AttemptPlan(port, mtu int, portFallback bool) []PortMtuAttempt {
+func AttemptPlan(port, mtu int, ladder, portFallback bool) []PortMtuAttempt {
 	if mtu <= 0 {
 		mtu = 1420
 	}
@@ -104,13 +105,16 @@ func AttemptPlan(port, mtu int, portFallback bool) []PortMtuAttempt {
 			break
 		}
 	}
+	// Порядок важен: 443 идёт ВТОРЫМ шагом, а не после всей лестницы MTU.
+	// Иначе в сети, где штатный порт закрыт, до 443 дело доходит через 16 с —
+	// а расширение успевает сдаться и перезапустить подключение раньше.
 	add(port, mtu)
-	if lower > 0 {
-		add(port, lower)
-	}
 	if portFallback && port != 443 {
 		add(443, mtu)
-		if lower > 0 {
+	}
+	if ladder && lower > 0 {
+		add(port, lower)
+		if portFallback && port != 443 {
 			add(443, lower)
 		}
 	}
@@ -348,7 +352,7 @@ func StartTunnelAuto(p *Profile, listen string, opts TunnelOptions) (*Tunnel, er
 	if opts.PortOverride > 0 {
 		prof.Port = opts.PortOverride
 	}
-	if !opts.Auto {
+	if !opts.Auto && !opts.PortFallback {
 		return StartTunnel(&prof, listen)
 	}
 	basePort, baseMTU := prof.Port, prof.MTU
@@ -356,7 +360,11 @@ func StartTunnelAuto(p *Profile, listen string, opts TunnelOptions) (*Tunnel, er
 	if opts.RelayOnly && opts.RelayAddr != "" {
 		return startViaRelay(&prof, listen, opts)
 	}
-	for _, a := range AttemptPlan(basePort, baseMTU, true) {
+	plan := AttemptPlan(basePort, baseMTU, opts.Auto, opts.PortFallback)
+	for i, a := range plan {
+		if i > 0 {
+			log.Printf("trying port %d mtu %d (попытка %d из %d)", a.Port, a.MTU, i+1, len(plan))
+		}
 		attempt := prof
 		attempt.Port = a.Port
 		attempt.MTU = a.MTU
