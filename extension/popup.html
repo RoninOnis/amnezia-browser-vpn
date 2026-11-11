@@ -123,14 +123,6 @@
           <span class="lbl">Порт SOCKS5 (0 — выбрать автоматически)</span>
           <input type="number" id="listenPort" min="0" max="65535" step="1" value="0">
         </label>
-        <label class="field" style="margin-top:10px">
-          <span class="lbl">Релей через 443/udp (пусто — не использовать)<span class="hint" style="display:block">нужен там, где другой VPN пропускает только QUIC</span></span>
-          <input type="text" id="relayAddr" placeholder="адрес:порт">
-        </label>
-        <label class="field" style="margin-top:8px">
-          <span class="lbl">Токен релея</span>
-          <input type="text" id="relayToken" placeholder="выдаётся вместе с адресом">
-        </label>
         <div class="row" style="margin-top:10px">
           <button class="btn primary" id="btnSavePrefs">Сохранить</button>
           <span class="hint" id="prefsHint"></span>

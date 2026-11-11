@@ -1,8 +1,10 @@
-/* Тесты релея на стороне расширения.
+/* Тесты поведения расширения при работе через 443 и «спутник сервера».
  *
- * Релей нужен там, где наружу пускают только UDP 443 (живой замер в корпоративной
- * сети: udp/443 OK, udp/37690 BLOCKED). Адрес и токен задаются в настройках, и
- * только при заполненном адресе они уходят в хелпер — иначе поле не влияет ни на что.
+ * Расклад: в сети с корпоративным VPN наружу пускают только UDP 443. На сервере
+ * Amnezia можно поставить «спутник» — наш релей, который слушает 443 и передаёт
+ * пакеты настоящему AWG. Тогда расширению НЕ нужно ничего знать про релей: оно
+ * просто пробует 443 вторым шагом. Тесты фиксируют, что в payload нет лишних
+ * полей и что статус корректно показывает подобранный MTU.
  *
  * Run: node --test extension/tests/relay.test.mjs
  */
@@ -31,7 +33,7 @@ function stubBrowser(storage = {}) {
         setTimeout(() => messageHandler({
           id: msg.id,
           ok: true,
-          status: { running: true, state: "connected", socksPort: 41234, mtu: 1280, mtuAuto: true, relay: true },
+          status: { running: true, state: "connected", socksPort: 41234, mtu: 1280, mtuAuto: true },
         }), 0);
       }
     },
@@ -77,49 +79,34 @@ const PROFILE = `state.settings = { ...state.settings, enabled: true, autoConnec
   profiles: [{ id: "p1", name: "t", endpoint: "203.0.113.10:40000", profile: {} }],
   activeProfileId: "p1" };`;
 
-test("релей по умолчанию выключен и не мешает прямому подключению", async () => {
+test("в настройках больше нет полей релея — клиенту нечего вписывать", async () => {
   const ctx = await bootBackground();
-  assert.equal(ev(ctx, "DEFAULTS.relayAddr"), "");
+  assert.equal(ev(ctx, "'relayAddr' in DEFAULTS"), false);
+  assert.equal(ev(ctx, "'relayToken' in DEFAULTS"), false);
+});
+
+test("connect отправляет только профиль, listen, mtu и mtuAuto", async () => {
+  const ctx = await bootBackground();
   await ev(ctx, PROFILE);
   await ev(ctx, "connectOnce()");
   const connect = plain(ev(ctx, "browser.__sent")).find((m) => m.cmd === "connect");
-  assert.equal(connect.relayAddr, undefined, "без адреса поле не отправляется");
-  assert.equal(connect.relayToken, undefined);
+  assert.ok(connect, "connect не отправлен");
+  const keys = Object.keys(connect).filter((k) => k !== "id" && k !== "cmd").sort();
+  assert.deepEqual(keys, ["listen", "mtu", "mtuAuto", "profile"]);
+  assert.equal(connect.mtuAuto, true, "443 и меньшие MTU пробуются сами, без настроек");
 });
 
-test("адрес и токен релея уходят в хелпер, когда заданы", async () => {
+test("статус показывает подобранный MTU", async () => {
   const ctx = await bootBackground();
-  await ev(ctx, PROFILE);
-  await ev(ctx, "state.settings = { ...state.settings, relayAddr: ' 213.165.34.238:443 ', relayToken: ' tok ' };");
-  await ev(ctx, "connectOnce()");
-  const connect = plain(ev(ctx, "browser.__sent")).filter((m) => m.cmd === "connect").pop();
-  assert.equal(connect.relayAddr, "213.165.34.238:443", "пробелы должны обрезаться");
-  assert.equal(connect.relayToken, "tok");
+  const st = plain(await ev(ctx, "normaliseStatus({ running: true, state: 'connected', mtu: 1280, mtuAuto: true })"));
+  assert.equal(st.mtu, 1280);
+  assert.equal(st.mtuAuto, true);
 });
 
-test("статус хелпера показывает работу через релей", async () => {
+test("savePrefs не воскрешает удалённые поля", async () => {
   const ctx = await bootBackground();
-  const st = plain(await ev(ctx, "normaliseStatus({ running: true, state: 'connected', relay: true })"));
-  assert.equal(st.relay, true);
-  const noRelay = plain(await ev(ctx, "normaliseStatus({ running: true, state: 'connected' })"));
-  assert.equal(noRelay.relay, false);
-});
-
-test("savePrefs сохраняет релей и не теряет MTU", async () => {
-  const ctx = await bootBackground();
-  await ev(ctx, "browser.__onMessage({ cmd: 'savePrefs', relayAddr: '1.2.3.4:443', relayToken: 'abc', mtuAuto: false, autoConnect: true, listenPort: 0 })");
+  await ev(ctx, "browser.__onMessage({ cmd: 'savePrefs', autoConnect: true, mtuAuto: false, listenPort: 0 })");
   await new Promise((r) => setTimeout(r, 10));
-  assert.equal(ev(ctx, "state.settings.relayAddr"), "1.2.3.4:443");
-  assert.equal(ev(ctx, "state.settings.relayToken"), "abc");
+  assert.equal(ev(ctx, "state.settings.relayAddr"), undefined);
   assert.equal(ev(ctx, "state.settings.mtuAuto"), false);
-});
-
-test("очистка адреса отключает релей", async () => {
-  const ctx = await bootBackground({ settings: { relayAddr: "1.2.3.4:443", relayToken: "abc", settingsVersion: 2 } });
-  await ev(ctx, "browser.__onMessage({ cmd: 'savePrefs', relayAddr: '', autoConnect: true, listenPort: 0 })");
-  await new Promise((r) => setTimeout(r, 10));
-  await ev(ctx, PROFILE);
-  await ev(ctx, "connectOnce()");
-  const connect = plain(ev(ctx, "browser.__sent")).filter((m) => m.cmd === "connect").pop();
-  assert.equal(connect.relayAddr, undefined, "пустой адрес — релей не используется");
 });

@@ -92,6 +92,70 @@ func TestRelayEndToEnd(t *testing.T) {
 	}
 }
 
+// Режим «спутник сервера»: клиент просит любой адрес, релей всё равно шлёт в свою
+// локальную цель. Именно так решается случай «сервер слушает 36853, сеть пускает только 443».
+func TestRelayFixedTarget(t *testing.T) {
+	echo, echoAddr := startEcho(t)
+	defer echo.Close()
+
+	srv := &RelayServer{Addr: "127.0.0.1:0", FixedTarget: echoAddr} // без токена и без белого списка
+	if err := srv.Start(); err != nil {
+		t.Fatalf("relay start: %v", err)
+	}
+	defer srv.Close()
+
+	client, err := StartRelayClient(srv.conn.LocalAddr().String(), "", "203.0.113.10:36853")
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	defer client.Close()
+
+	dev, _ := net.Dial("udp", client.LocalAddr())
+	defer dev.Close()
+	dev.Write([]byte("probe-through-fixed-target"))
+	buf := make([]byte, 256)
+	dev.SetReadDeadline(time.Now().Add(3 * time.Second))
+	n, err := dev.Read(buf)
+	if err != nil {
+		t.Fatalf("ответ через спутник не пришёл: %v", err)
+	}
+	if string(buf[:n]) != "probe-through-fixed-target" {
+		t.Fatalf("получено %q", buf[:n])
+	}
+}
+
+// Прозрачный режим: клиент не знает про релей, просто шлёт UDP на его порт.
+// Это и есть сценарий «сервер знакомого: сеть пускает только 443».
+func TestRelayTransparentMode(t *testing.T) {
+	echo, echoAddr := startEcho(t)
+	defer echo.Close()
+
+	srv := &RelayServer{Addr: "127.0.0.1:0", FixedTarget: echoAddr}
+	if err := srv.Start(); err != nil {
+		t.Fatalf("relay start: %v", err)
+	}
+	defer srv.Close()
+
+	// обычный UDP-клиент, без всякого протокола
+	dev, err := net.Dial("udp", srv.conn.LocalAddr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer dev.Close()
+
+	want := []byte("plain-awg-like-packet")
+	dev.Write(want)
+	buf := make([]byte, 256)
+	dev.SetReadDeadline(time.Now().Add(3 * time.Second))
+	n, err := dev.Read(buf)
+	if err != nil {
+		t.Fatalf("прозрачный ответ не пришёл: %v", err)
+	}
+	if string(buf[:n]) != string(want) {
+		t.Fatalf("получено %q, ожидалось %q", buf[:n], want)
+	}
+}
+
 func TestRelayRejectsWrongToken(t *testing.T) {
 	echo, echoAddr := startEcho(t)
 	defer echo.Close()

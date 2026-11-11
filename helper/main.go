@@ -51,6 +51,7 @@ func main() {
 		relayServe  = flag.Bool("relay-serve", false, "run as a UDP relay (server side)")
 		relayListen = flag.String("relay-listen", "0.0.0.0:443", "relay listen address for --relay-serve")
 		relayAllow  = flag.String("relay-allow", "", "comma-separated allowed upstream targets for --relay-serve")
+		relayTarget = flag.String("relay-target", "", "fixed local target for --relay-serve (\"127.0.0.1:36853\"), typically the AWG port on the same host")
 	)
 	flag.Parse()
 
@@ -75,11 +76,15 @@ func main() {
 				allowed[t] = true
 			}
 		}
-		srv := &RelayServer{Addr: *relayListen, Token: *relayToken, Allowed: allowed}
+		srv := &RelayServer{Addr: *relayListen, Token: *relayToken, Allowed: allowed, FixedTarget: *relayTarget}
 		if err := srv.Start(); err != nil {
 			log.Fatalf("relay: %v", err)
 		}
-		log.Printf("relay up, token %s, targets %v", maskToken(*relayToken), *relayAllow)
+		if *relayTarget != "" {
+			log.Printf("relay up (спутник), token %s, fixed target %s", maskToken(*relayToken), *relayTarget)
+		} else {
+			log.Printf("relay up, token %s, targets %v", maskToken(*relayToken), *relayAllow)
+		}
 		waitForSignal()
 		srv.Close()
 		return

@@ -245,8 +245,6 @@ function renderSettings() {
   const t = s.tunnel || {};
   $("#autoConnect").checked = !!s.autoConnect;
   $("#mtuAuto").checked = s.mtuAuto !== false;
-  $("#relayAddr").value = s.relayAddr || "";
-  $("#relayToken").value = s.relayToken || "";
   $("#listenPort").value = s.listenPort || 0;
   $("#helperMissingHint").textContent = s.helperMissing
     ? "Хелпер не найден. Кнопка «Установить хелпер» проведёт по шагам: скачать, открыть, запустить."
@@ -425,8 +423,6 @@ $("#btnSavePrefs").addEventListener("click", async () => {
   const res = await send("savePrefs", {
     autoConnect: $("#autoConnect").checked,
     mtuAuto: $("#mtuAuto").checked,
-    relayAddr: $("#relayAddr").value.trim(),
-    relayToken: $("#relayToken").value.trim(),
     listenPort: Number($("#listenPort").value) || 0,
   });
   $("#prefsHint").textContent = res && res.ok ? "сохранено" : "ошибка: " + ((res && res.error) || "?");

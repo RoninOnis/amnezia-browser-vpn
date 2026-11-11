@@ -106,9 +106,17 @@ func decodeRelayReply(b []byte) (byte, []byte, error) {
 
 // RelayServer пересылает UDP-пакеты клиентов на разрешённые адреса.
 type RelayServer struct {
-	Addr    string
-	Token   string
-	Allowed map[string]bool // "ip:port": куда разрешено пересылать
+	Addr  string
+	Token string
+	// FixedTarget — режим «спутник сервера»: релей стоит на том же хосте, что и
+	// сервер AmneziaWG, игнорирует запрошенный клиентом адрес и всегда пересылает
+	// в эту локальную цель (например 127.0.0.1:36853). Так не нужны ни правка
+	// контейнера, ни новые ссылки vpn://, ни настройки у клиента: клиент просто
+	// попадает на 443/udp, а релей отдаёт пакеты локальному AWG. Токен в этом
+	// режиме можно не задавать: цель фиксирована, а без ключей AWG всё равно
+	// ничего не сделаешь.
+	FixedTarget string
+	Allowed     map[string]bool // "ip:port": куда разрешено пересылать
 
 	conn      *net.UDPConn
 	mu        sync.Mutex
@@ -121,6 +129,10 @@ type relaySession struct {
 	up     *net.UDPConn
 	client *net.UDPAddr
 	last   time.Time
+	// wrapped: клиент говорит на нашем протоколе (релей как отдельный сервис) —
+	// ответы уходят с заголовком. Иначе режим прозрачный: клиент просто шлёт
+	// AWG-пакеты на 443, как будто это сам сервер, и получает их как есть.
+	wrapped bool
 }
 
 func (s *RelayServer) Start() error {
@@ -131,7 +143,11 @@ func (s *RelayServer) Start() error {
 	s.conn = conn
 	s.sessions = map[string]*relaySession{}
 	s.closing = make(chan struct{})
-	log.Printf("relay listening on %s, allowed targets: %d", conn.LocalAddr(), len(s.Allowed))
+	if s.FixedTarget != "" {
+		log.Printf("relay listening on %s, fixed target %s (спутник сервера)", conn.LocalAddr(), s.FixedTarget)
+	} else {
+		log.Printf("relay listening on %s, allowed targets: %d", conn.LocalAddr(), len(s.Allowed))
+	}
 	go s.readLoop()
 	go s.gcLoop()
 	return nil
@@ -169,12 +185,15 @@ func (s *RelayServer) handle(pkt []byte, addr *net.UDPAddr) {
 			s.reply(addr, relayBadToken, nil)
 			return
 		}
-		if !s.allowed(req.Target) {
+		target := req.Target
+		if s.FixedTarget != "" {
+			target = s.FixedTarget
+		} else if !s.allowed(req.Target) {
 			log.Printf("relay: отказано клиенту %s: адрес %q не в белом списке", key, req.Target)
 			s.reply(addr, relayNotAllowed, nil)
 			return
 		}
-		sess, err := s.sessionFor(key, addr, req.Target)
+		sess, err := s.sessionFor(key, addr, target)
 		if err != nil {
 			log.Printf("relay: сессия для %s: %v", key, err)
 			s.reply(addr, relayServerErr, nil)
@@ -183,7 +202,7 @@ func (s *RelayServer) handle(pkt []byte, addr *net.UDPAddr) {
 		s.reply(addr, relayOK, nil)
 		if len(req.Payload) > 0 {
 			if _, err := sess.up.Write(req.Payload); err != nil {
-				log.Printf("relay: пересылка в %s: %v", req.Target, err)
+				log.Printf("relay: пересылка в %s: %v", target, err)
 			}
 		}
 		return
@@ -193,7 +212,17 @@ func (s *RelayServer) handle(pkt []byte, addr *net.UDPAddr) {
 	sess := s.sessions[key]
 	s.mu.Unlock()
 	if sess == nil {
-		return // пакет без установленной сессии — молча игнорируем
+		if s.FixedTarget == "" {
+			return // чужой пакет без сессии: в обычном режиме игнорируем
+		}
+		// прозрачный режим: клиент не знает про релей, создаём сессию по факту пакета
+		var err error
+		sess, err = s.sessionFor(key, addr, s.FixedTarget)
+		if err != nil {
+			log.Printf("relay: прозрачная сессия для %s: %v", key, err)
+			return
+		}
+		sess.wrapped = false
 	}
 	sess.last = time.Now()
 	if _, err := sess.up.Write(pkt); err != nil {
@@ -209,6 +238,10 @@ func (s *RelayServer) allowed(target string) bool {
 }
 
 func (s *RelayServer) sessionFor(key string, addr *net.UDPAddr, target string) (*relaySession, error) {
+	return s.newSession(key, addr, target, true)
+}
+
+func (s *RelayServer) newSession(key string, addr *net.UDPAddr, target string, wrapped bool) (*relaySession, error) {
 	s.mu.Lock()
 	if sess, ok := s.sessions[key]; ok {
 		sess.last = time.Now()
@@ -221,7 +254,7 @@ func (s *RelayServer) sessionFor(key string, addr *net.UDPAddr, target string) (
 	if err != nil {
 		return nil, err
 	}
-	sess := &relaySession{up: up, client: addr, last: time.Now()}
+	sess := &relaySession{up: up, client: addr, last: time.Now(), wrapped: wrapped}
 	s.mu.Lock()
 	s.sessions[key] = sess
 	s.mu.Unlock()
@@ -234,13 +267,21 @@ func (s *RelayServer) sessionFor(key string, addr *net.UDPAddr, target string) (
 				return
 			}
 			sess.last = time.Now()
-			// тем же заголовком, что и служебные ответы: клиент разбирает всё единообразно
-			if _, err := s.conn.WriteToUDP(encodeRelayReply(relayOK, buf[:n]), addr); err != nil {
+			out := buf[:n]
+			if sess.wrapped {
+				// тем же заголовком, что и служебные ответы: клиент разбирает единообразно
+				out = encodeRelayReply(relayOK, buf[:n])
+			}
+			if _, err := s.conn.WriteToUDP(out, addr); err != nil {
 				return
 			}
 		}
 	}()
-	log.Printf("relay: сессия %s -> %s", key, target)
+	mode := "протокол"
+	if !wrapped {
+		mode = "прозрачно"
+	}
+	log.Printf("relay: сессия %s -> %s (%s)", key, target, mode)
 	return sess, nil
 }
 

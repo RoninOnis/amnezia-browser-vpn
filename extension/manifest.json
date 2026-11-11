@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Amnezia Browser VPN",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "AmneziaWG только для браузера: туннель через локальный хелпер, раздельное туннелирование по сайтам.",
   "browser_specific_settings": {
     "gecko": {
