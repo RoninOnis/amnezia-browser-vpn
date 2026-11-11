@@ -154,34 +154,44 @@ func writeUpdateCache(info UpdateInfo) {
 	_ = os.WriteFile(updateCachePath(), raw, 0o600)
 }
 
-// fetchLatestRelease спрашивает GitHub о последнем релизе и разбирает версию.
-func fetchLatestRelease() (UpdateInfo, error) {
+// fetchRelease возвращает последний релиз как есть: нужны и теги, и список файлов.
+func fetchRelease() (releasePayload, error) {
 	client := &http.Client{Timeout: updateTimeout}
 	req, err := http.NewRequest(http.MethodGet, releasesAPI, nil)
 	if err != nil {
-		return UpdateInfo{}, err
+		return releasePayload{}, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "awgbv-helper")
 	resp, err := client.Do(req)
 	if err != nil {
-		return UpdateInfo{}, fmt.Errorf("нет связи с GitHub: %w", err)
+		return releasePayload{}, fmt.Errorf("нет связи с GitHub: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return UpdateInfo{}, fmt.Errorf("GitHub ответил %d", resp.StatusCode)
+		return releasePayload{}, fmt.Errorf("GitHub ответил %d", resp.StatusCode)
 	}
 	var payload releasePayload
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return UpdateInfo{}, fmt.Errorf("разбор ответа GitHub: %w", err)
+		return releasePayload{}, fmt.Errorf("разбор ответа GitHub: %w", err)
 	}
 	if payload.Draft || payload.Prerelease {
-		return UpdateInfo{}, errors.New("последний релиз помечен как черновик или пре-релиз")
+		return releasePayload{}, errors.New("последний релиз помечен как черновик или пре-релиз")
 	}
 	latest := strings.TrimPrefix(strings.TrimSpace(payload.TagName), "v")
 	if _, err := parseVersion(latest); err != nil {
-		return UpdateInfo{}, fmt.Errorf("непонятный тег релиза %q: %w", payload.TagName, err)
+		return releasePayload{}, fmt.Errorf("непонятный тег релиза %q: %w", payload.TagName, err)
 	}
+	return payload, nil
+}
+
+// fetchLatestRelease спрашивает GitHub о последнем релизе и разбирает версию.
+func fetchLatestRelease() (UpdateInfo, error) {
+	payload, err := fetchRelease()
+	if err != nil {
+		return UpdateInfo{}, err
+	}
+	latest := strings.TrimPrefix(strings.TrimSpace(payload.TagName), "v")
 	info := UpdateInfo{
 		Checked:     true,
 		Latest:      latest,

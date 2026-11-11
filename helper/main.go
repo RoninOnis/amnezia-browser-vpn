@@ -42,6 +42,7 @@ func main() {
 		doStop       = flag.Bool("stop", false, "disconnect and stop the helper daemon")
 		dumpProf     = flag.String("dump-profile", "", "parse a vpn:// link / .conf and print the normalised profile JSON")
 		showVer      = flag.Bool("version", false, "print version")
+		selfUpFlag   = flag.Bool("self-update", false, "download the latest release and replace this binary")
 		mtuFlag      = flag.Int("mtu", 0, "override profile MTU (0 = use profile value)")
 		mtuAuto      = flag.Bool("mtu-auto", false, "walk MTU down until a handshake appears")
 		portFallback = flag.Bool("port-fallback", false, "additionally try port 443 (server-side satellite, QUIC-only networks)")
@@ -58,6 +59,16 @@ func main() {
 
 	if *showVer {
 		fmt.Println(version)
+		return
+	}
+
+	if *selfUpFlag {
+		res := selfUpdate()
+		out, _ := json.MarshalIndent(res, "", "  ")
+		fmt.Println(string(out))
+		if res.Error != "" {
+			os.Exit(1)
+		}
 		return
 	}
 

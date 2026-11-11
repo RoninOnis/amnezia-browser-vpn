@@ -18,6 +18,17 @@ const (
 // native-messaging host's stdout belongs to the browser, so the daemon must not
 // keep a copy of it.
 func spawnDetached() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return spawnDetachedAt(exe)
+}
+
+// spawnDetachedAt starts the daemon from an explicit path. Needed by the
+// self-updater: after the binary is swapped, os.Executable() still points at
+// the old, renamed file, so the daemon would be started from the old build.
+func spawnDetachedAt(exe string) error {
 	if err := os.MkdirAll(stateDir(), 0o700); err != nil {
 		return err
 	}
@@ -27,10 +38,6 @@ func spawnDetached() error {
 	}
 	defer logf.Close()
 
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
 	cmd := exec.Command(exe, "--daemon")
 	cmd.Stdout = logf
 	cmd.Stderr = logf

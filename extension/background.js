@@ -52,6 +52,8 @@ const state = {
   nextRetryAt: 0,
   connecting: false, // идёт connect: второй параллельно не запускаем
   updates: null,      // результат проверки версий аддона и хелпера
+  updatingHelper: false, // идёт обновление хелпера
+  lastHelperUpdate: null, // {at, ok, from, to, error}
 };
 
 const HOST_MISSING = /no such native application|native application .* not found|No such native/i;
@@ -292,6 +294,8 @@ function publicState() {
     platformOs: state.platformOs,
     lastAttempt: state.lastAttempt,
     updates: state.updates,
+    updatingHelper: state.updatingHelper,
+    lastHelperUpdate: state.lastHelperUpdate,
   };
 }
 
@@ -375,6 +379,48 @@ async function checkVersions(force = false) {
   };
   notifyUI();
   return state.updates;
+}
+
+// Обновление хелпера в один клик: скачивание, сверка sha256, подмена бинаря и
+// перезапуск демона делает сам хелпер. Здесь только запуск и понятный статус.
+async function updateHelper() {
+  if (state.updatingHelper) {
+    return Promise.resolve({ ok: false, error: "обновление уже идёт" });
+  }
+  state.updatingHelper = true;
+  notifyUI();
+  try {
+    // ждём долго: скачивание ~7 МБ плюс перезапуск демона
+    const resp = await sendNative("self_update", {}, 180000);
+    const res = (resp && resp.selfUpdate) || {};
+    const ok = !!(resp && resp.ok);
+    state.lastHelperUpdate = {
+      at: Date.now(),
+      ok,
+      from: res.from || "",
+      to: res.to || "",
+      error: (resp && !resp.ok ? resp.error : "") || res.error || "",
+    };
+    if (ok) {
+      state.helperVersion = res.to || state.helperVersion;
+      state.updates = null; // версии изменились — проверим заново
+      state.lastError = "";
+    }
+    // error на верхнем уровне: попап показывает именно его, а не «нет ответа»
+    return { ok, error: state.lastHelperUpdate.error, result: state.lastHelperUpdate, state: publicState() };
+  } catch (err) {
+    const error = String((err && err.message) || err);
+    state.lastHelperUpdate = { at: Date.now(), ok: false, error };
+    return { ok: false, error, state: publicState() };
+  } finally {
+    state.updatingHelper = false;
+    notifyUI();
+    // демон перезапущен: поднимаем туннель и обновляем состояние
+    try {
+      await refresh();
+    } catch (_) {}
+    checkVersions(true).catch(() => {});
+  }
 }
 
 /* -------------------------------------------------------------- operations */
@@ -558,6 +604,8 @@ browser.runtime.onMessage.addListener((msg) => {
   switch (msg.cmd) {
     case "getState":
       return Promise.resolve({ ok: true, state: publicState() });
+    case "updateHelper":
+      return updateHelper();
     case "checkVersions":
       return checkVersions(!!msg.force)
         .then((updates) => ({ ok: true, updates, state: publicState() }))

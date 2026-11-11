@@ -31,12 +31,13 @@ type nmMessage struct {
 }
 
 type nmReply struct {
-	ID      int64         `json:"id,omitempty"`
-	OK      bool          `json:"ok"`
-	Error   string        `json:"error,omitempty"`
-	Status  *TunnelStatus `json:"status,omitempty"`
-	Version string        `json:"version,omitempty"`
-	Update  *UpdateInfo   `json:"update,omitempty"`
+	ID      int64             `json:"id,omitempty"`
+	OK      bool              `json:"ok"`
+	Error   string            `json:"error,omitempty"`
+	Status  *TunnelStatus     `json:"status,omitempty"`
+	Version string            `json:"version,omitempty"`
+	Update  *UpdateInfo       `json:"update,omitempty"`
+	SelfUp  *SelfUpdateResult `json:"selfUpdate,omitempty"`
 }
 
 func runNativeMessaging() error {
@@ -119,6 +120,15 @@ func handleNM(msg nmMessage) nmReply {
 			return reply
 		}
 		reply.OK, reply.Error, reply.Status = resp.OK, resp.Error, resp.Status
+		return reply
+	case "self_update":
+		res := selfUpdate()
+		reply.OK = res.Error == ""
+		reply.Error = res.Error
+		reply.SelfUp = &res
+		if res.To != "" {
+			reply.Version = res.To
+		}
 		return reply
 	case "update_check":
 		// Делаем проверку прямо здесь, не поднимая демон: это один HTTP-запрос,

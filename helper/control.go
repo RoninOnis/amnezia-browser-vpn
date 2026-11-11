@@ -45,10 +45,12 @@ type request struct {
 }
 
 type response struct {
-	OK     bool          `json:"ok"`
-	Error  string        `json:"error,omitempty"`
-	Status *TunnelStatus `json:"status,omitempty"`
-	Update *UpdateInfo   `json:"update,omitempty"`
+	OK      bool              `json:"ok"`
+	Error   string            `json:"error,omitempty"`
+	Status  *TunnelStatus     `json:"status,omitempty"`
+	Update  *UpdateInfo       `json:"update,omitempty"`
+	SelfUp  *SelfUpdateResult `json:"selfUpdate,omitempty"`
+	Version string            `json:"version,omitempty"`
 }
 
 func stateDir() string {
@@ -245,6 +247,10 @@ func (d *Daemon) handle(conn net.Conn) {
 	case "update_check":
 		info := checkUpdates(req.Force)
 		writeResp(conn, response{OK: true, Update: &info})
+	case "version":
+		// версия именно этого процесса: после подмены бинаря расширение
+		// сверяет её и понимает, что демон уже новый
+		writeResp(conn, response{OK: true, Version: version})
 	case "connect": // обрабатывается в handleConnect, сюда не попадает
 		writeResp(conn, response{OK: false, Error: "internal: connect handled elsewhere"})
 	case "disconnect":

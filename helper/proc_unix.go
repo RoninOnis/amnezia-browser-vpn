@@ -12,6 +12,18 @@ import (
 // native-messaging host (the browser may unload the extension background page,
 // and the tunnel must not die with it).
 func spawnDetached() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return spawnDetachedAt(exe)
+}
+
+// spawnDetachedAt запускает демон из указанного пути. Путь передаётся явно,
+// потому что после подмены бинаря os.Executable() возвращает уже другой файл
+// (/proc/self/exe указывает на переименованный inode) — и обновление запускало
+// бы старый бинарь вместо нового.
+func spawnDetachedAt(exe string) error {
 	if err := os.MkdirAll(stateDir(), 0o700); err != nil {
 		return err
 	}
@@ -21,10 +33,6 @@ func spawnDetached() error {
 	}
 	defer logf.Close()
 
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
 	cmd := exec.Command(exe, "--daemon")
 	cmd.Stdout = logf
 	cmd.Stderr = logf

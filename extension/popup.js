@@ -339,6 +339,12 @@ function renderUpdates() {
   const helperEl = $("#updHelper");
   const hint = $("#updHint");
   const dl = $("#btnDownloadAddon");
+  const upd = $("#btnUpdateHelper");
+  if (upd) {
+    upd.hidden = !(u.helper && (u.helper.outdated || u.helper.missing));
+    upd.disabled = !!(state && state.updatingHelper);
+    upd.textContent = state && state.updatingHelper ? "Обновляю…" : "Обновить хелпер";
+  }
   if (!u) {
     addonEl.textContent = "не проверялось";
     addonEl.className = "";
@@ -355,7 +361,14 @@ function renderUpdates() {
   if (u.error) lines.push(`Проверить не удалось: ${u.error}.`);
   if (u.helper && u.helper.missing && !u.error) lines.push("Хелпер не установлен — сравнивать нечего.");
   if (u.addon && u.addon.outdated) lines.push("Аддон старее релиза: обновите .xpi из релиза.");
-  if (u.helper && u.helper.outdated) lines.push("Хелпер старее релиза — обновите его установщиком.");
+  if (u.helper && u.helper.outdated) lines.push("Хелпер старее релиза — нажмите «Обновить хелпер»: туннель перезапустится сам.");
+  const last = state && state.lastHelperUpdate;
+  if (last) {
+    lines.length = 0;
+    lines.push(last.ok
+      ? `Хелпер обновлён${last.from ? ` с ${last.from}` : ""} до ${last.to}, туннель перезапущен.`
+      : `Обновить хелпер не удалось: ${last.error || "неизвестная ошибка"}.`);
+  }
   if (!lines.length) lines.push("Всё актуально.");
   hint.textContent = lines.join(" ");
   dl.hidden = !(u.addon && u.addon.outdated && u.pageUrl);
@@ -651,6 +664,26 @@ $("#btnCheckUpdates").addEventListener("click", async () => {
   } finally {
     btn.disabled = false;
     btn.textContent = "Проверить";
+  }
+});
+
+$("#btnUpdateHelper").addEventListener("click", async () => {
+  const btn = $("#btnUpdateHelper");
+  btn.disabled = true;
+  btn.textContent = "Обновляю…";
+  $("#updHint").textContent = "Скачиваю и проверяю новый хелпер…";
+  try {
+    const res = await send("updateHelper");
+    if (res && res.state) {
+      state = res.state;
+      render();
+    }
+    if (res && !res.ok) {
+      $("#updHint").textContent = "Обновить не удалось: " + (res.error || "нет ответа");
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Обновить хелпер";
   }
 });
 
