@@ -19,7 +19,10 @@
 
     <!-- ---------------------------------------------------------- Главная -->
     <section class="screen active" id="screen-home">
-      <div id="alertBox" class="alert hidden"></div>
+      <div id="alertBox" class="alert hidden">
+        <span id="alertText"></span>
+        <button class="btn small" id="alertInstall">Установить хелпер</button>
+      </div>
 
       <div class="hero">
         <button class="hero-btn" id="heroBtn" title="Подключить / отключить">
@@ -124,10 +127,12 @@
 
       <div class="card">
         <h2>Хелпер</h2>
+        <p class="hint" id="helperMissingHint" style="margin:0 0 10px"></p>
         <div class="kv"><span class="k">Состояние</span><span id="hState">—</span></div>
         <div class="kv"><span class="k">Версия</span><span class="mono" id="hVersion">—</span></div>
         <div class="kv"><span class="k">SOCKS5</span><span class="mono" id="hSocks">—</span></div>
-        <div class="row" style="margin-top:10px">
+        <div class="row wrap" style="margin-top:10px; gap:8px">
+          <button class="btn accent" id="btnInstall">Установить хелпер</button>
           <button class="btn" id="btnRestart">Перезапустить</button>
           <button class="btn danger" id="btnQuit">Остановить</button>
         </div>
@@ -141,6 +146,30 @@
         <p class="hint">AmneziaWG в user space: без TUN, без прав администратора, системные маршруты не меняются.</p>
       </div>
     </section>
+  </div>
+
+  <div class="sheet hidden" id="installSheet">
+    <div class="sheet-card">
+      <div class="row between">
+        <h2 style="margin:0">Установка хелпера</h2>
+        <button class="icon-btn" id="installClose" title="Закрыть">×</button>
+      </div>
+      <div class="sheet-body">
+        <p class="hint" id="installIntro"></p>
+        <ol class="steps" id="installSteps"></ol>
+        <p class="hint" id="installFallback"></p>
+      </div>
+      <div class="sheet-actions">
+        <div class="row wrap" style="gap:8px">
+          <button class="btn accent" id="installDownload">Скачать установщик</button>
+          <button class="btn" id="installCopy">Скопировать команду</button>
+        </div>
+        <div class="row" style="margin-top:9px">
+          <button class="btn primary" id="installRecheck">Проверить снова</button>
+          <span class="hint" id="installStatus"></span>
+        </div>
+      </div>
+    </div>
   </div>
 
   <nav class="tabbar" id="tabbar">
@@ -162,6 +191,7 @@
     </button>
   </nav>
 </div>
+<script src="lib/install-guide.js"></script>
 <script src="popup.js"></script>
 </body>
 </html>

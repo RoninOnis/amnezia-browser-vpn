@@ -79,12 +79,13 @@ the normal connection.
 bash install-linux.sh                          # Linux (берёт последний релиз)
 ```
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File install-windows.ps1   # Windows
+```bat
+install-windows.cmd
 ```
 
-Либо, если PowerShell ругается на политику выполнения: запустить `install-windows.cmd` из ассетов
-релиза двойным кликом — обёртка сама вызывает PowerShell с `-ExecutionPolicy Bypass`.
+Один файл, чистый batch: `curl.exe` скачивает нужный бинарь, `certutil` сверяет sha256 с
+`SHA256SUMS`, `copy` кладёт его в `%LOCALAPPDATA%\AwgBrowserVpn`, `reg add` регистрирует манифест
+в `HKCU`. PowerShell не используется вообще — поэтому политика выполнения не мешает.
 
 Оба скрипта лежат в ассетах релиза. Ниже — установка из репозитория.
 
@@ -214,7 +215,8 @@ node --test extension/tests/split.test.mjs          # логика списко�
 
 | Симптом | Причина и лечение |
 |---|---|
-| Windows: `Амперсанд (&) не разрешен` или «Файл не имеет цифровой подписи» | Первое — старый баг установщика: `.ps1` был в UTF-8 без BOM, PowerShell 5.1 читал его как ANSI и ломался на строке 82. Обновить `install-windows.ps1` из релиза `v0.2.1+` (BOM + CRLF) либо запускать `install-windows.cmd`. Второе — политика выполнения: `powershell -NoProfile -ExecutionPolicy Bypass -File install-windows.ps1`. |
+| Windows: `Амперсанд (&) не разрешен` | Старый баг установщика (`.ps1` в UTF-8 без BOM, PowerShell 5.1 читал как ANSI). Обновиться на релиз `v0.3.0+`: там только `install-windows.cmd`, PowerShell внутри не используется. |
+| Windows: `curl.exe not found` | Установщик требует Windows 10 1803+ (там curl встроен). На более старых системах скачайте `awgbv-windows-amd64.exe` и `SHA256SUMS` вручную и положите exe в `%LOCALAPPDATA%\AwgBrowserVpn`. |
 | В попапе «No such native application awgbv» | Манифеста нет там, где его ищет Firefox, или он указывает на недоступный путь. Типичные причины: (1) установщик запускали через **sudo** — манифест уехал в `/root`, а Firefox ищет в домашнем каталоге пользователя; (2) **snap-Firefox** — и манифест, и бинарь должны лежать внутри `~/snap/firefox/common/`; установщик делает это сам, но только если запущен без sudo. Проверка: `ls -l ~/snap/firefox/common/.mozilla/native-messaging-hosts/ ~/.mozilla/native-messaging-hosts/`. |
 | Туннель подключён, но IP не меняется | Расширению не выдан доступ «Access your data for all websites». Без host permissions фильтр `proxy.onRequest` не срабатывает **молча** — это документированное требование API. Проверьте `about:addons` → разрешения. |
 | Сайт попал в список, но идёт напрямую | Проверьте, в каком списке он лежит: запись в «Напрямую» перебивает «Через VPN». Быстрая проверка — переключатель «Этот сайт» на «Главной». |

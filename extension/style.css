@@ -50,7 +50,7 @@ body {
 
 /* ---------------------------------------------------------------- каркас */
 
-.app { display: flex; flex-direction: column; height: 100%; }
+.app { position: relative; display: flex; flex-direction: column; height: 100%; }
 
 .topbar {
   display: flex;
@@ -368,3 +368,68 @@ textarea { min-height: 84px; resize: vertical; font-family: ui-monospace, Consol
 
 .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; padding: 3px 0; }
 .kv .k { color: var(--text-quaternary); }
+
+/* ------------------------------------------- мастер установки хелпера */
+
+.alert { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.alert span { flex: 1 1 180px; }
+
+.sheet {
+  /* absolute, а не fixed: шторка обязана совпадать с попапом, а не с вьюпортом */
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-end;
+  background: rgba(0, 0, 0, .58);
+}
+
+.sheet-card {
+  width: 100%;
+  max-height: 94%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  padding: 16px 16px 18px;
+}
+
+/* текст шагов прокручивается, кнопки всегда на виду */
+.sheet-body { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
+.sheet-actions { flex: 0 0 auto; margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--border-faint); }
+
+.steps { list-style: none; counter-reset: step; margin: 12px 0 0; padding: 0; }
+
+.steps li {
+  counter-increment: step;
+  position: relative;
+  padding-left: 34px;
+  margin-bottom: 13px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.steps li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: -1px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent-light);
+  background: rgba(245, 158, 11, .12);
+  border: 1px solid var(--accent-subtle);
+}
+
+.steps li .step-title { display: block; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
+.steps li code { display: inline-block; margin-top: 5px; padding: 4px 7px; border-radius: 6px;
+  background: var(--bg-surface-alt); border: 1px solid var(--border-faint);
+  font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; color: var(--text-secondary);
+  word-break: break-all; }

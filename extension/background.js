@@ -34,7 +34,18 @@ const state = {
   nativeSeq: 0,
   pending: new Map(),
   lastError: "",
+  // «No such native application awgbv» — не сбой связи, а отсутствие установленного хелпера:
+  // это единственный случай, когда показываем мастер установки.
+  helperMissing: false,
+  platformOs: "",
 };
+
+const HOST_MISSING = /no such native application|native application .* not found|No such native/i;
+
+function noteHelperError(message) {
+  state.lastError = message || "";
+  if (HOST_MISSING.test(state.lastError)) state.helperMissing = true;
+}
 
 /* ---------------------------------------------------------------- settings */
 
@@ -59,6 +70,7 @@ function activeProfile() {
 /* ------------------------------------------------------------ native helper */
 
 function onNativeMessage(msg) {
+  state.helperMissing = false;
   const id = msg && msg.id;
   if (id != null && state.pending.has(id)) {
     const { resolve, timer } = state.pending.get(id);
@@ -79,7 +91,7 @@ function ensurePort() {
     port.onMessage.addListener(onNativeMessage);
     port.onDisconnect.addListener((p) => {
       const err = browser.runtime.lastError;
-      state.lastError = (err && err.message) || (p && p.error && p.error.message) || "native host disconnected";
+      noteHelperError((err && err.message) || (p && p.error && p.error.message) || "native host disconnected");
       state.nativePort = null;
       for (const [, { resolve, timer }] of state.pending) {
         clearTimeout(timer);
@@ -92,7 +104,7 @@ function ensurePort() {
     state.lastError = "";
     return port;
   } catch (err) {
-    state.lastError = String((err && err.message) || err);
+    noteHelperError(String((err && err.message) || err));
     state.nativePort = null;
     return null;
   }
@@ -253,6 +265,8 @@ function publicState() {
     listenPort: s.listenPort,
     tunnel: state.tunnel,
     lastError: state.lastError,
+    helperMissing: state.helperMissing,
+    platformOs: state.platformOs,
   };
 }
 
@@ -382,6 +396,13 @@ browser.runtime.onMessage.addListener((msg) => {
       return doConnect();
     case "disconnect":
       return doDisconnect();
+    case "recheck": {
+      // мастер установки: пробуем соединение с нуля, без кэша порта
+      state.nativePort = null;
+      state.helperMissing = false;
+      state.lastError = "";
+      return refreshStatus().then(() => ({ ok: true, state: publicState() }));
+    }
     case "refresh":
       return refreshStatus().then((s) => ({ ok: true, state: s }));
     case "saveLists":
@@ -447,6 +468,12 @@ browser.alarms.onAlarm.addListener(async (alarm) => {
 // Event page may be re-spawned at any time: settings must be loaded before the
 // first proxy decision, so keep a promise the listener can rely on.
 const ready = loadSettings().then(async () => {
+  try {
+    const info = await browser.runtime.getPlatformInfo();
+    state.platformOs = info && info.os ? info.os : "";
+  } catch (err) {
+    state.platformOs = "";
+  }
   await browser.alarms.create(POLL_ALARM, { periodInMinutes: 1 });
   updateBadge();
   if (state.settings.enabled && state.settings.autoConnect) {

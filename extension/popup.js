@@ -130,13 +130,21 @@ function renderHome() {
   }
   $("#btnReconnect").disabled = !s.activeProfile;
 
-  // алерт
+  // алерт: отдельно «хелпер не установлен» (это не ошибка, а первый запуск)
   const alertBox = $("#alertBox");
-  if (s.lastError) {
-    alertBox.textContent = s.lastError;
+  const alertText = $("#alertText");
+  const installBtn = $("#alertInstall");
+  if (s.helperMissing) {
+    alertText.textContent = "Хелпер awgbv не установлен — без него туннель не поднять.";
+    installBtn.classList.remove("hidden");
+    alertBox.classList.remove("hidden");
+  } else if (s.lastError) {
+    alertText.textContent = s.lastError;
+    installBtn.classList.add("hidden");
     alertBox.classList.remove("hidden");
   } else if (!s.profiles.length) {
-    alertBox.textContent = "Профиля нет: на вкладке «Серверы» вставьте ссылку vpn:// из приложения Amnezia.";
+    alertText.textContent = "Профиля нет: на вкладке «Серверы» вставьте ссылку vpn:// из приложения Amnezia.";
+    installBtn.classList.add("hidden");
     alertBox.classList.remove("hidden");
   } else {
     alertBox.classList.add("hidden");
@@ -237,7 +245,12 @@ function renderSettings() {
   const t = s.tunnel || {};
   $("#autoConnect").checked = !!s.autoConnect;
   $("#listenPort").value = s.listenPort || 0;
-  $("#hState").textContent = t.running ? (t.state || "—") : "остановлен";
+  $("#helperMissingHint").textContent = s.helperMissing
+    ? "Хелпер не найден. Кнопка «Установить хелпер» проведёт по шагам: скачать, открыть, запустить."
+    : "";
+  $("#hState").textContent = s.helperMissing
+    ? "не установлен"
+    : (t.running ? (t.state || "—") : "остановлен");
   $("#hVersion").textContent = s.helperVersion || "—";
   $("#hSocks").textContent = t.socksPort ? `127.0.0.1:${t.socksPort}` : "—";
   $("#xVersion").textContent = browser.runtime.getManifest().version;
@@ -420,6 +433,104 @@ $("#btnQuit").addEventListener("click", async () => {
 
 /* -------------------------------------------------------------- запуск */
 
+/* --------------------------------------------- мастер установки хелпера */
+
+let guide = null;
+
+function renderInstallSheet() {
+  const g = state && state.platformOs ? installGuide(state.platformOs) : installGuide("");
+  guide = g;
+
+  $("#installIntro").textContent = g.intro;
+  const box = $("#installSteps");
+  box.innerHTML = "";
+  for (const step of g.steps) {
+    const li = document.createElement("li");
+    li.appendChild(el("span", "step-title", step.title));
+    li.appendChild(document.createTextNode(step.body));
+    if (step.command) li.appendChild(el("code", null, step.command));
+    box.appendChild(li);
+  }
+
+  const fb = $("#installFallback");
+  fb.textContent = "";
+  if (g.fallback && g.fallback.label) {
+    fb.appendChild(document.createTextNode(g.fallback.label));
+    if (g.command) {
+      fb.appendChild(document.createElement("br"));
+      fb.appendChild(el("code", null, g.command));
+    }
+  }
+
+  $("#installDownload").classList.toggle("hidden", !g.files.length);
+  $("#installDownload").textContent = g.files.length === 1
+    ? "Скачать установщик"
+    : `Скачать установщик (${g.files.length} файла)`;
+  $("#installCopy").classList.toggle("hidden", !g.command);
+  $("#installStatus").textContent = "";
+}
+
+function openInstallSheet() {
+  if (!state) return;
+  renderInstallSheet();
+  $("#installSheet").classList.remove("hidden");
+}
+
+function closeInstallSheet() {
+  $("#installSheet").classList.add("hidden");
+}
+
+$("#installClose").addEventListener("click", closeInstallSheet);
+$("#installSheet").addEventListener("click", (ev) => {
+  if (ev.target === $("#installSheet")) closeInstallSheet();
+});
+
+$("#installDownload").addEventListener("click", async () => {
+  const box = $("#installStatus");
+  if (!guide || !guide.downloadUrls.length) return;
+  box.textContent = "скачиваю…";
+  try {
+    for (const url of guide.downloadUrls) {
+      await browser.downloads.download({ url, saveAs: false });
+    }
+    box.textContent = `${guide.files.length} файл(а) в «Загрузках»`;
+  } catch (err) {
+    box.textContent = "не удалось скачать: " + ((err && err.message) || err);
+  }
+});
+
+$("#installCopy").addEventListener("click", async () => {
+  const box = $("#installStatus");
+  if (!guide || !guide.command) return;
+  try {
+    await navigator.clipboard.writeText(guide.command);
+    box.textContent = "команда скопирована";
+  } catch (err) {
+    box.textContent = "скопируйте вручную: " + guide.command;
+  }
+});
+
+$("#installRecheck").addEventListener("click", async () => {
+  const box = $("#installStatus");
+  box.textContent = "проверяю…";
+  const res = await send("recheck");
+  if (res && res.state) {
+    state = res.state;
+    render();
+  }
+  if (state && !state.helperMissing) {
+    box.textContent = "хелпер найден";
+    setTimeout(closeInstallSheet, 700);
+    if (state.enabled && !state.tunnel.running) await send("connect");
+    await refresh();
+  } else {
+    box.textContent = "пока не найден — проверьте, что установщик отработал, и перезапустите Firefox";
+  }
+});
+
+$("#alertInstall").addEventListener("click", openInstallSheet);
+$("#btnInstall").addEventListener("click", openInstallSheet);
+
 browser.runtime.onMessage.addListener((msg) => {
   if (msg && msg.type === "state" && msg.payload) {
     state = msg.payload;
@@ -448,6 +559,7 @@ async function init() {
   for (const b of $$("#siteSwitch button")) b.classList.toggle("active", b.dataset.value === cur);
 
   showScreen("home");
+  if (state && state.helperMissing) openInstallSheet();
   refresh();
   setInterval(refresh, 4000);
 }
