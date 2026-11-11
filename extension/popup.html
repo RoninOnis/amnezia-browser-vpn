@@ -109,72 +109,121 @@
 
     <!-- ----------------------------------------------------------- Панель -->
     <section class="screen" id="screen-admin">
-    <div class="card" id="adminConnectCard">
-      <h2>Свой сервер Amnezia</h2>
-      <p class="hint" style="margin:0 0 10px">
-        Нужен SSH-доступ к серверу. Пароль используется один раз для первичной настройки
-        и не сохраняется: дальше работа идёт отдельным ключом, которым можно выполнить
-        только управление ключами.
+      <h2>Панель</h2>
+      <p class="hint" id="adminIntro">
+        Ключи и служба на вашем сервере Amnezia: список устройств, выпуск новых ключей
+        и спутник на UDP/443, если в сети разрешён только этот порт.
       </p>
-      <div class="kv"><span class="k">Адрес</span><input class="input" id="admHost" placeholder="vpn.example.com"></div>
-      <div class="kv"><span class="k">SSH-порт</span><input class="input" id="admPort" value="22"></div>
-      <div class="kv"><span class="k">Пользователь</span><input class="input" id="admUser" value="root"></div>
-      <div class="kv"><span class="k">Пароль</span><input class="input" id="admPassword" type="password" placeholder="не сохраняется"></div>
-      <div class="row wrap" style="margin-top:10px; gap:8px">
-        <button class="btn accent" id="btnAdminConnect">Подключить и настроить</button>
-      </div>
-      <p class="hint" id="admConnectHint" style="margin:8px 0 0"></p>
-    </div>
 
-    <div class="card" id="adminPeersCard" hidden>
-      <h2>Ключи на сервере</h2>
-      <div class="kv"><span class="k">Сервер</span><span class="mono" id="admServer">—</span></div>
-      <div class="kv"><span class="k">Контейнер</span><span class="mono" id="admContainer">—</span></div>
-      <div class="row wrap" style="margin-top:10px; gap:8px">
-        <button class="btn" id="btnAdminRefresh">Обновить список</button>
-        <button class="btn accent" id="btnAdminCreate">Новый ключ</button>
+      <div class="card" id="adminConnectCard" hidden>
+        <h2>Свой сервер Amnezia</h2>
+        <p class="hint" id="adminConnectIntro">
+          Нужен SSH-доступ к серверу. Пароль используется один раз для первичной настройки
+          и не сохраняется: дальше работа идёт отдельным ключом, которым можно выполнить
+          только управление ключами.
+        </p>
+        <div class="fields" style="margin-top:10px">
+          <label class="field">
+            <span class="lbl">Адрес</span>
+            <input type="text" id="admHost" placeholder="vpn.example.com" spellcheck="false" autocomplete="off">
+          </label>
+          <div class="fields two">
+            <label class="field">
+              <span class="lbl">SSH-порт</span>
+              <input type="number" id="admPort" value="22" min="1" max="65535" step="1">
+            </label>
+            <label class="field">
+              <span class="lbl">Пользователь</span>
+              <input type="text" id="admUser" value="root" spellcheck="false" autocomplete="off">
+            </label>
+          </div>
+          <label class="field">
+            <span class="lbl">Пароль</span>
+            <input type="password" id="admPassword" placeholder="не сохраняется" autocomplete="off">
+          </label>
+        </div>
+        <div class="row wrap" style="margin-top:10px; gap:8px">
+          <button class="btn accent" id="btnAdminConnect">Подключить и настроить</button>
+        </div>
+        <p class="hint" id="admConnectHint"></p>
       </div>
-      <p class="hint" id="admPeerHint" style="margin:8px 0 0"></p>
-      <div id="admPeers"></div>
-    </div>
 
-    <div class="card" id="adminKeyCard" hidden>
-      <h2>Новый ключ готов</h2>
-      <div class="kv"><span class="k">Имя</span><span id="admKeyName">—</span></div>
-      <div class="kv"><span class="k">Внутренний IP</span><span class="mono" id="admKeyIp">—</span></div>
-      <p class="hint">Ссылка ниже — единственный экземпляр ключа. Передайте её на устройство и добавьте: она больше нигде не хранится.</p>
-      <textarea class="input mono" id="admKeyLink" rows="3" readonly></textarea>
-      <div class="row wrap" style="margin-top:10px; gap:8px">
-        <button class="btn accent" id="btnAdminAdopt">Добавить в мои серверы</button>
-        <button class="btn" id="btnAdminCopy">Скопировать ссылку</button>
+      <div class="card" id="adminPeersCard" hidden>
+        <div class="row between">
+          <h2 style="margin:0">Ключи на сервере</h2>
+          <button class="btn small ghost" id="btnAdminAnother">другой сервер</button>
+        </div>
+        <div class="kv"><span class="k">Сервер</span><span class="mono" id="admServer">—</span></div>
+        <div class="kv"><span class="k">Контейнер</span><span class="mono" id="admContainer">—</span></div>
+        <div class="kv"><span class="k">Подсеть</span><span class="mono" id="admSubnet">—</span></div>
+        <div class="row wrap" style="margin-top:10px; gap:8px">
+          <button class="btn" id="btnAdminRefresh">Обновить список</button>
+          <button class="btn accent" id="btnAdminCreate">Новый ключ</button>
+        </div>
+        <p class="hint" id="admPeerHint"></p>
+        <div class="list" id="admPeers"></div>
       </div>
-      <p class="hint" id="admKeyHint" style="margin:8px 0 0"></p>
-    </div>
 
-    <div class="card" id="adminSatCard">
-      <h2>Спутник на 443</h2>
-      <p class="hint" style="margin:0 0 10px">
-        Если в сети разрешён только UDP 443 (так бывает за корпоративным VPN), поставьте на
-        сервер спутник: он слушает 443 и передаёт пакеты вашему AmneziaWG. Ключи и контейнер
-        не меняются, клиенту настраивать нечего.
-      </p>
-      <p class="hint" style="margin:0 0 10px">
-        Это системная служба от root, поэтому нужен полный SSH-доступ. Пароль используется
-        один раз и не сохраняется — ограниченный ключ панели такого намеренно не умеет.
-      </p>
-      <div class="kv"><span class="k">Адрес</span><input class="input" id="satHost" placeholder="vpn.example.com"></div>
-      <div class="kv"><span class="k">SSH-порт</span><input class="input" id="satPort" value="22"></div>
-      <div class="kv"><span class="k">Пользователь</span><input class="input" id="satUser" value="root"></div>
-      <div class="kv"><span class="k">Пароль</span><input class="input" id="satPassword" type="password" placeholder="не сохраняется"></div>
-      <div class="row wrap" style="margin-top:10px; gap:8px">
-        <button class="btn" id="btnSatPlan">Проверить</button>
-        <button class="btn accent" id="btnSatInstall">Установить</button>
+      <div class="card" id="adminKeyCard" hidden>
+        <h2>Новый ключ готов</h2>
+        <div class="kv"><span class="k">Имя</span><span id="admKeyName">—</span></div>
+        <div class="kv"><span class="k">Внутренний IP</span><span class="mono" id="admKeyIp">—</span></div>
+        <p class="hint" id="admKeyWarn">
+          Ссылка ниже — единственный экземпляр ключа: сервер её не хранит. Живёт она только
+          до закрытия браузера, так что скопируйте её на устройство сейчас — после
+          перезапуска Firefox ссылку взять будет негде, придётся выпускать новый ключ.
+        </p>
+        <textarea class="mono" id="admKeyLink" rows="3" readonly spellcheck="false"></textarea>
+        <div class="row wrap" style="margin-top:10px; gap:8px">
+          <button class="btn accent" id="btnAdminCopy">Скопировать ссылку</button>
+          <button class="btn" id="btnAdminAdopt">Добавить в мои серверы</button>
+        </div>
+        <p class="hint" id="admKeyHint"></p>
       </div>
-      <p class="hint" id="satHint" style="margin:8px 0 0"></p>
-      <pre class="mono" id="satOutput" hidden
-           style="margin:8px 0 0; padding:8px; background:#101012; border:1px solid #313136; border-radius:8px; white-space:pre-wrap; max-height:170px; overflow:auto; font-size:11px"></pre>
-    </div>
-  </section>
+
+      <details class="card fold" id="adminSatCard">
+        <summary>Спутник на 443</summary>
+        <p class="hint">
+          Если в сети разрешён только UDP 443 (так бывает за корпоративным VPN), поставьте на
+          сервер спутник: он слушает 443 и передаёт пакеты вашему AmneziaWG. Ключи и контейнер
+          не меняются, клиенту настраивать нечего.
+        </p>
+        <p class="hint">
+          Это системная служба от root, поэтому нужен полный SSH-доступ. Пароль используется
+          один раз и не сохраняется — ограниченный ключ панели такого намеренно не умеет.
+        </p>
+        <div class="fields" style="margin-top:10px">
+          <label class="field">
+            <span class="lbl">Адрес</span>
+            <input type="text" id="satHost" placeholder="vpn.example.com" spellcheck="false" autocomplete="off">
+          </label>
+          <div class="fields two">
+            <label class="field">
+              <span class="lbl">SSH-порт</span>
+              <input type="number" id="satPort" value="22" min="1" max="65535" step="1">
+            </label>
+            <label class="field">
+              <span class="lbl">Пользователь</span>
+              <input type="text" id="satUser" value="root" spellcheck="false" autocomplete="off">
+            </label>
+          </div>
+          <label class="field">
+            <span class="lbl">Пароль</span>
+            <input type="password" id="satPassword" placeholder="не сохраняется" autocomplete="off">
+          </label>
+        </div>
+        <label class="switch-row">
+          <input type="checkbox" id="satFirewall">
+          <span>открыть UDP/443 в firewall сервера</span>
+        </label>
+        <div class="row wrap" style="margin-top:10px; gap:8px">
+          <button class="btn" id="btnSatPlan">Проверить</button>
+          <button class="btn accent" id="btnSatInstall">Установить</button>
+        </div>
+        <p class="hint" id="satHint"></p>
+        <pre class="mono console" id="satOutput" hidden></pre>
+      </details>
+    </section>
 
   <!-- -------------------------------------------------------- Настройки -->
   <section class="screen" id="screen-settings">

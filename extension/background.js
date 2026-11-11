@@ -599,8 +599,11 @@ async function runSatellite({ host, port, user, password, dryRun, openFirewall }
     if (res && !res.ok && !state.satellite) {
       state.satellite = { dryRun: !!dryRun, finished: false, output: (res && res.error) || "нет ответа" };
     }
-    if (res && !res.ok && state.satellite && !state.satellite.output) {
-      state.satellite.output = res.error || "";
+    if (state.satellite) {
+      // факт «firewall меняли или нет» попап обязан показать честно: хелпер это
+      // поле не возвращает, поэтому запоминаем, что мы у него просили
+      state.satellite.openFirewall = !!openFirewall && !dryRun;
+      if (res && !res.ok && !state.satellite.output) state.satellite.output = res.error || "";
     }
     return { ok: !!(res && res.ok), satellite: state.satellite };
   } finally {
@@ -751,6 +754,13 @@ async function refreshStatus() {
   if (!state.servers.length && !state.helperMissing) {
     const servers = await sendNative("peer_servers", {}, 8000);
     if (servers && servers.ok && Array.isArray(servers.servers)) state.servers = servers.servers;
+  }
+  // Сервер уже настроен, а ключей в попапе нет (перезапуск браузера, новая сессия
+  // event-страницы): подтягиваем список сами. Раньше попап показывал пустой список
+  // и форму с SSH-паролем, будто сервер вообще не настраивали.
+  // Одной попытки достаточно: после ошибки ждём явного «Обновить список».
+  if (state.servers.length && !state.peers && !state.peerBusy && !state.peerError && !state.helperMissing) {
+    await loadPeers(state.peerServer || state.servers[0].host);
   }
   // Проверку версий делаем один раз за сессию и не ждём её: она ходит в сеть.
   if (!state.updates && !state.helperMissing) checkVersions(false).catch(() => {});
@@ -919,6 +929,8 @@ const ready = loadSettings().then(async () => {
   } catch (err) {
     state.platformOs = "";
   }
+  // выпущенный ключ переживает перезапуск event-страницы (storage.session)
+  await loadSessionKey();
   await browser.alarms.create(POLL_ALARM, { periodInMinutes: 1 });
   updateBadge();
   if (state.settings.enabled && state.settings.autoConnect) {

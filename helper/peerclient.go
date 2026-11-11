@@ -14,8 +14,11 @@ import (
 // authorized_keys стоит restrict,command="sudo /usr/local/sbin/awgbv-peer".
 // То есть единственное, что можно выполнить этим ключом, — глаголы list/add/remove.
 type PeerInfo struct {
-	PublicKey     string `json:"publicKey"`
-	PresharedKey  string `json:"presharedKey"`
+	PublicKey string `json:"publicKey"`
+	// PresharedKey НЕ сериализуем: серверный скрипт его не отдаёт (PSK нужен
+	// только для нового пира и генерируется локально), а список уходит в браузер
+	// целиком — общий секрет всех клиентов там не нужен.
+	PresharedKey  string `json:"-"`
 	Endpoint      string `json:"endpoint"`
 	AllowedIPs    string `json:"allowedIps"`
 	LastHandshake int64  `json:"lastHandshake"`

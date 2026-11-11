@@ -290,10 +290,22 @@ func handlePeer(msg nmMessage, reply nmReply) nmReply {
 			reply.OK, reply.Error = false, err.Error()
 			return reply
 		}
-		reply.OK = true
 		reply.Peer = res
-		if ok, _ := res["ok"].(bool); !ok {
+		// Успех только если пир ДОБАВЛЕН и ссылка собрана. Иначе панель показывала
+		// «Новый ключ готов» с пустым полем, а пир уже висел на сервере.
+		if ok, _ := res["ok"].(bool); ok {
+			link, _ := res["vpnLink"].(string)
+			if link == "" {
+				reply.OK, reply.Error = false, "пир добавлен, но ссылка не собрана — отзовите ключ и попробуйте снова"
+			} else {
+				reply.OK = true
+			}
+		} else {
+			reply.OK = false
 			reply.Error, _ = res["error"].(string)
+			if reply.Error == "" {
+				reply.Error = "не удалось выпустить ключ"
+			}
 		}
 	case "peer_revoke":
 		if err := PeerRevoke(msg.Host, msg.SSHPort, msg.PublicKey); err != nil {
