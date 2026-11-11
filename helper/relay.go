@@ -215,14 +215,15 @@ func (s *RelayServer) handle(pkt []byte, addr *net.UDPAddr) {
 		if s.FixedTarget == "" {
 			return // чужой пакет без сессии: в обычном режиме игнорируем
 		}
-		// прозрачный режим: клиент не знает про релей, создаём сессию по факту пакета
+		// прозрачный режим: клиент не знает про релей, создаём сессию по факту пакета.
+		// wrapped=false сразу: иначе в логе сессия помечается «протокол», хотя клиент
+		// говорит обычными AWG-пакетами, и разбор инцидента идёт по ложному следу.
 		var err error
-		sess, err = s.sessionFor(key, addr, s.FixedTarget)
+		sess, err = s.newSession(key, addr, s.FixedTarget, false)
 		if err != nil {
 			log.Printf("relay: прозрачная сессия для %s: %v", key, err)
 			return
 		}
-		sess.wrapped = false
 	}
 	sess.last = time.Now()
 	if _, err := sess.up.Write(pkt); err != nil {
