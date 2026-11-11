@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 )
 
 // Firefox native messaging framing: uint32 length (native byte order, little
@@ -71,6 +72,26 @@ func runNativeMessaging() error {
 	}
 }
 
+// waitSettled polls the daemon until the tunnel leaves the "connecting" state
+// or the timeout passes. The browser gets a definite answer instead of a
+// transient state that flips to an error on the next poll — that was the
+// "works only on the second click" complaint.
+func waitSettled(timeout time.Duration) *TunnelStatus {
+	deadline := time.Now().Add(timeout)
+	var last *TunnelStatus
+	for time.Now().Before(deadline) {
+		resp, err := call(request{Cmd: "status"})
+		if err == nil && resp != nil && resp.Status != nil {
+			last = resp.Status
+			if resp.Status.State != "connecting" {
+				return resp.Status
+			}
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	return last
+}
+
 func handleNM(msg nmMessage) nmReply {
 	reply := nmReply{ID: msg.ID, OK: true}
 	switch msg.Cmd {
@@ -106,10 +127,31 @@ func handleNM(msg nmMessage) nmReply {
 			return reply
 		}
 		if resp == nil {
-			reply.OK, reply.Error = false, "helper daemon unavailable"
-			return reply
+			// демон мог умереть между ensureDaemon и вызовом — поднимаем и пробуем ещё раз
+			if err := ensureDaemon(); err != nil {
+				reply.OK, reply.Error = false, err.Error()
+				return reply
+			}
+			resp, err = call(request{Cmd: "connect", Profile: msg.Profile, Listen: msg.Listen})
+			if err != nil {
+				reply.OK, reply.Error = false, err.Error()
+				return reply
+			}
+			if resp == nil {
+				reply.OK, reply.Error = false, "helper daemon unavailable"
+				return reply
+			}
 		}
-		reply.OK, reply.Error, reply.Status = resp.OK, resp.Error, resp.Status
+		reply.OK, reply.Error = resp.OK, resp.Error
+		if resp.OK {
+			if settled := waitSettled(12 * time.Second); settled != nil {
+				reply.Status = settled
+			} else {
+				reply.Status = resp.Status
+			}
+		} else {
+			reply.Status = resp.Status
+		}
 		return reply
 	case "disconnect":
 		resp, err := call(request{Cmd: "disconnect"})

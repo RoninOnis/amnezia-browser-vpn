@@ -253,6 +253,11 @@ function renderSettings() {
     : (t.running ? (t.state || "—") : "остановлен");
   $("#hVersion").textContent = s.helperVersion || "—";
   $("#hSocks").textContent = t.socksPort ? `127.0.0.1:${t.socksPort}` : "—";
+  const att = s.lastAttempt;
+  $("#hAttempt").textContent = !att
+    ? "—"
+    : (att.ok ? "успешно, " : "ошибка, ") + fmtAgo(Math.floor(att.at / 1000))
+      + (att.ok ? "" : " · " + (att.error || "без описания"));
   $("#xVersion").textContent = browser.runtime.getManifest().version;
 }
 

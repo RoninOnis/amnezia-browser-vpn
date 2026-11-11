@@ -13,9 +13,13 @@ const STATE_KEY = "settings";
 const POLL_ALARM = "awgbv-poll";
 const LOOPBACK = /^(localhost|127\.\d+\.\d+\.\d+|::1|\[::1\]|.*\.local|.*\.localhost)$/i;
 
+const SETTINGS_VERSION = 2;
+
 const DEFAULTS = {
   enabled: false,
-  autoConnect: false,
+  // Автостарт включён: «включено» = «хочу, чтобы работало всегда». Пока значение было false
+  // по умолчанию, после перезапуска Firefox туннель никто не поднимал — жалоба «не стартует».
+  autoConnect: true,
   // Списки как в Amnezia: «Через VPN» и «Напрямую». Отдельного переключателя режима
   // нет — режим выводится из того, пуст ли список «Через VPN» (см. effectiveMode).
   whitelist: [],
@@ -38,6 +42,10 @@ const state = {
   // это единственный случай, когда показываем мастер установки.
   helperMissing: false,
   platformOs: "",
+  // сторож автостарта: попытка, отсрочка и нарастающая пауза между переподключениями
+  lastAttempt: null,
+  retryDelay: 15000,
+  nextRetryAt: 0,
 };
 
 const HOST_MISSING = /no such native application|native application .* not found|No such native/i;
@@ -51,7 +59,16 @@ function noteHelperError(message) {
 
 async function loadSettings() {
   const stored = await browser.storage.local.get(STATE_KEY);
-  state.settings = { ...DEFAULTS, ...(stored[STATE_KEY] || {}) };
+  const saved = stored[STATE_KEY] || {};
+  const merged = { ...DEFAULTS, ...saved };
+  if ((saved.settingsVersion || 0) < SETTINGS_VERSION) {
+    // миграция: до 0.3.0 автостарт был выключен по умолчанию, из-за чего VPN не поднимался
+    // после перезапуска браузера. Уважаем выбор пользователя дальше, но один раз включаем.
+    merged.autoConnect = true;
+    merged.settingsVersion = SETTINGS_VERSION;
+    await browser.storage.local.set({ [STATE_KEY]: merged });
+  }
+  state.settings = merged;
   return state.settings;
 }
 
@@ -267,12 +284,28 @@ function publicState() {
     lastError: state.lastError,
     helperMissing: state.helperMissing,
     platformOs: state.platformOs,
+    lastAttempt: state.lastAttempt,
   };
 }
 
 /* -------------------------------------------------------------- operations */
 
 async function doConnect() {
+  // Первая попытка может попасть в момент, когда демон ещё поднимается (особенно на Windows
+  // после перезагрузки). Один короткий повтор снимает жалобу «заводится только со второго раза».
+  const first = await connectOnce();
+  if (first && first.ok) {
+    state.lastAttempt = { at: Date.now(), ok: true, error: "" };
+    return first;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  const second = await connectOnce();
+  const ok = !!(second && second.ok);
+  state.lastAttempt = { at: Date.now(), ok, error: ok ? "" : (second && second.error) || "" };
+  return second || first;
+}
+
+async function connectOnce() {
   const profile = activeProfile();
   if (!profile) return { ok: false, error: "нет сохранённого профиля — добавьте vpn:// ссылку" };
   const listen = state.settings.listenPort
@@ -287,6 +320,31 @@ async function doConnect() {
   updateBadge();
   notifyUI();
   return resp;
+}
+
+// Сторож: если туннель должен работать, а его нет — поднимаем. Пауза растёт, чтобы не
+// заваливать сервер handshake'ами, когда он недоступен.
+async function ensureTunnel() {
+  const s = state.settings;
+  if (!s.enabled || !s.autoConnect) return { skipped: "off" };
+  if (!activeProfile()) return { skipped: "no-profile" };
+  if (state.tunnel.running) {
+    state.retryDelay = 15000;
+    state.nextRetryAt = 0;
+    return { skipped: "running" };
+  }
+  if (Date.now() < state.nextRetryAt) return { skipped: "backoff" };
+
+  const res = await doConnect();
+  const alive = state.tunnel.running || state.tunnel.state === "connecting";
+  if (alive) {
+    state.retryDelay = 15000;
+    state.nextRetryAt = 0;
+  } else {
+    state.nextRetryAt = Date.now() + state.retryDelay;
+    state.retryDelay = Math.min(state.retryDelay * 2, 300000);
+  }
+  return res;
 }
 
 function normaliseStatus(st) {
@@ -315,6 +373,9 @@ async function doDisconnect() {
 async function setEnabled(value) {
   await saveSettings({ enabled: !!value });
   if (value) {
+    // явное включение сбрасывает отсрочку сторожа: пользователь ждёт подключения сейчас
+    state.nextRetryAt = 0;
+    state.retryDelay = 15000;
     const profile = activeProfile();
     if (profile) {
       const resp = await doConnect();
@@ -338,11 +399,8 @@ async function refreshStatus() {
     state.tunnel = { ...state.tunnel, running: false, state: "stopped", socksPort: 0, error: resp.error || "" };
     updateBadge();
   }
-  // Auto-heal: enabled but the tunnel is gone (e.g. helper restarted, PC rebooted)
-  if (state.settings.enabled && state.settings.autoConnect && !state.tunnel.running) {
-    const profile = activeProfile();
-    if (profile) await doConnect();
-  }
+  // Авто-лечение: включено, а туннеля нет (перезагрузка, падение демона, обновление бинаря).
+  await ensureTunnel();
   return publicState();
 }
 
