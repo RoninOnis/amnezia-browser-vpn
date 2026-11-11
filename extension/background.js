@@ -61,6 +61,8 @@ const state = {
   peerBusy: false,   // идёт SSH-операция
   peerError: "",     // текст последней ошибки панели
   lastPeerKey: null, // {name, allowedIps, vpnLink} — только что выпущенный ключ
+  satellite: null,   // {dryRun, finished, output} — последний ответ установщика спутника
+  satelliteBusy: false,
 };
 
 const HOST_MISSING = /no such native application|native application .* not found|No such native/i;
@@ -309,6 +311,8 @@ function publicState() {
     peerBusy: state.peerBusy,
     peerError: state.peerError,
     lastPeerKey: state.lastPeerKey,
+    satellite: state.satellite,
+    satelliteBusy: state.satelliteBusy,
   };
 }
 
@@ -540,6 +544,30 @@ async function adoptPanelKey() {
   return addProfile(key.vpnLink);
 }
 
+// Спутник ставится системной службой от root, поэтому это ОТДЕЛЬНОЕ действие с
+// полным SSH-доступом: ограниченный ключ панели намеренно такого не умеет.
+async function runSatellite({ host, port, user, password, dryRun, openFirewall }) {
+  state.satelliteBusy = true;
+  notifyUI();
+  try {
+    const res = await sendNative(dryRun ? "satellite_plan" : "satellite_install", {
+      host, sshPort: Number(port) || 22, sshUser: user || "root", password,
+      dryRun: !!dryRun, openFirewall: !!openFirewall,
+    }, 300000);
+    state.satellite = (res && res.satellite) || null;
+    if (res && !res.ok && !state.satellite) {
+      state.satellite = { dryRun: !!dryRun, finished: false, output: (res && res.error) || "нет ответа" };
+    }
+    if (res && !res.ok && state.satellite && !state.satellite.output) {
+      state.satellite.output = res.error || "";
+    }
+    return { ok: !!(res && res.ok), satellite: state.satellite };
+  } finally {
+    state.satelliteBusy = false;
+    notifyUI();
+  }
+}
+
 /* -------------------------------------------------------------- operations */
 
 async function doConnect() {
@@ -736,6 +764,10 @@ browser.runtime.onMessage.addListener((msg) => {
       return createPeer(msg.name).then((res) => ({ ...res, state: publicState() }));
     case "revokePeer":
       return revokePeer(msg.publicKey).then((res) => ({ ...res, state: publicState() }));
+    case "satellitePlan":
+      return runSatellite({ ...msg, dryRun: true }).then((res) => ({ ...res, state: publicState() }));
+    case "satelliteInstall":
+      return runSatellite({ ...msg, dryRun: false }).then((res) => ({ ...res, state: publicState() }));
     case "adoptPanelKey":
       return adoptPanelKey().then((res) => ({ ...res, state: publicState() }));
     case "checkVersions":

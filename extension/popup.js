@@ -424,6 +424,21 @@ function renderAdmin() {
     box.appendChild(item);
   }
 
+  const sat = s.satellite;
+  const satOut = $("#satOutput");
+  if (sat && sat.output) {
+    satOut.hidden = false;
+    satOut.textContent = sat.output;
+  } else {
+    satOut.hidden = true;
+    satOut.textContent = "";
+  }
+  if (s.satelliteBusy) $("#satHint").textContent = "Работаю… установка может занять минуту";
+  else if (sat && sat.finished) $("#satHint").textContent = "Готово: служба awgbv-satellite запущена";
+  else if (sat && sat.dryRun) $("#satHint").textContent = "Это только проверка — ничего не изменено";
+  else if (sat) $("#satHint").textContent = "Установщик сообщил о проблеме — подробности ниже";
+  else $("#satHint").textContent = "";
+
   const key = s.lastPeerKey;
   $("#adminKeyCard").hidden = !key;
   if (key) {
@@ -809,6 +824,41 @@ $("#btnAdminAdopt").addEventListener("click", async () => {
   $("#admKeyHint").textContent = res && res.ok
     ? "Ключ добавлен в «Серверы» — можно подключаться"
     : "Не удалось: " + ((res && res.error) || "нет ответа");
+});
+
+async function runSat(dryRun) {
+  const host = $("#satHost").value.trim();
+  if (!host) {
+    $("#satHint").textContent = "Укажите адрес сервера";
+    return;
+  }
+  const btn = dryRun ? $("#btnSatPlan") : $("#btnSatInstall");
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = dryRun ? "Проверяю…" : "Устанавливаю…";
+  try {
+    const res = await send(dryRun ? "satellitePlan" : "satelliteInstall", {
+      host,
+      port: Number($("#satPort").value) || 22,
+      user: $("#satUser").value.trim() || "root",
+      password: $("#satPassword").value,
+      openFirewall: false,
+    });
+    if (res && res.state) {
+      state = res.state;
+      render();
+    }
+    if (!dryRun) $("#satPassword").value = "";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+$("#btnSatPlan").addEventListener("click", () => runSat(true));
+$("#btnSatInstall").addEventListener("click", async () => {
+  if (!confirm("Поставить на сервер системную службу awgbv-satellite (UDP/443)?")) return;
+  await runSat(false);
 });
 
 $("#btnUpdateHelper").addEventListener("click", async () => {

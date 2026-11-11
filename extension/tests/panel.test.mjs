@@ -193,6 +193,57 @@ test("отзыв ключа убирает его из состояния", asyn
   assert.equal(msg.host, "vpn.example.com");
 });
 
+test("спутник: проверка идёт как dry-run, установка — без него", async () => {
+  const ctx = await boot({
+    replies: {
+      satellite_plan: { ok: true, satellite: { dryRun: true, finished: false, output: "план" } },
+      satellite_install: { ok: true, satellite: { dryRun: false, finished: true, output: "служба запущена" } },
+    },
+  });
+  await ev(ctx, "state.helperMissing = false;");
+  await ev(ctx, `runSatellite({ host: "vpn.example.com", password: "Секрет", dryRun: true })`);
+  const planMsg = plain(ev(ctx, "browser.__sent")).filter((m) => m.cmd === "satellite_plan").pop();
+  assert.equal(planMsg.dryRun, true);
+  assert.equal(ev(ctx, "state.satelliteBusy"), false);
+
+  await ev(ctx, `runSatellite({ host: "vpn.example.com", password: "Секрет", dryRun: false })`);
+  const instMsg = plain(ev(ctx, "browser.__sent")).filter((m) => m.cmd === "satellite_install").pop();
+  assert.equal(instMsg.dryRun, false);
+  const sat = plain(ev(ctx, "state.satellite"));
+  assert.equal(sat.finished, true);
+  // пароль не должен осесть в состоянии
+  assert.ok(!JSON.stringify(plain(ev(ctx, "publicState()"))).includes("Секрет"));
+});
+
+// Отказ установщика («порт занят», «чужой контейнер») — это не «молчание хелпера»:
+// пользователь обязан увидеть текст, иначе он не поймёт, что чинить.
+test("спутник: отказ установщика доходит текстом, а не теряется", async () => {
+  const ctx = await boot({
+    replies: {
+      satellite_plan: {
+        ok: false,
+        error: "порт 443/udp уже занят: awgbv-satellite",
+        satellite: { dryRun: true, finished: false, output: "порт 443/udp уже занят: awgbv-satellite" },
+      },
+    },
+  });
+  await ev(ctx, "state.helperMissing = false;");
+  const res = plain(await ev(ctx, `runSatellite({ host: "vpn.example.com", dryRun: true })`));
+  assert.equal(res.ok, false);
+  const sat = plain(ev(ctx, "state.satellite"));
+  assert.match(sat.output, /443\/udp уже занят/);
+  assert.equal(sat.finished, false);
+});
+
+test("спутник: если хелпер вообще не ответил, причина тоже не теряется", async () => {
+  const ctx = await boot({ replies: { satellite_install: { ok: false, error: "нет ответа от хелпера" } } });
+  await ev(ctx, "state.helperMissing = false;");
+  await ev(ctx, `runSatellite({ host: "vpn.example.com", dryRun: false })`);
+  const sat = plain(ev(ctx, "state.satellite"));
+  assert.match(sat.output, /нет ответа/);
+  assert.equal(ev(ctx, "state.satelliteBusy"), false);
+});
+
 test("без сервера панель не дёргает хелпер", async () => {
   const ctx = await boot({});
   await ev(ctx, "state.helperMissing = false; state.servers = []; state.peerServer = '';");

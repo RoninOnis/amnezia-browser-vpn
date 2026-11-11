@@ -36,19 +36,23 @@ type nmMessage struct {
 	KeyPath   string `json:"keyPath,omitempty"`
 	Name      string `json:"name,omitempty"`
 	PublicKey string `json:"publicKey,omitempty"`
+	// спутник сервера
+	DryRun       *bool `json:"dryRun,omitempty"`
+	OpenFirewall bool  `json:"openFirewall,omitempty"`
 }
 
 type nmReply struct {
-	ID      int64             `json:"id,omitempty"`
-	OK      bool              `json:"ok"`
-	Error   string            `json:"error,omitempty"`
-	Status  *TunnelStatus     `json:"status,omitempty"`
-	Version string            `json:"version,omitempty"`
-	Update  *UpdateInfo       `json:"update,omitempty"`
-	SelfUp  *SelfUpdateResult `json:"selfUpdate,omitempty"`
-	Peers   *PeerList         `json:"peers,omitempty"`
-	Peer    map[string]any    `json:"peer,omitempty"`
-	Servers []ServerRecord    `json:"servers,omitempty"`
+	ID        int64             `json:"id,omitempty"`
+	OK        bool              `json:"ok"`
+	Error     string            `json:"error,omitempty"`
+	Status    *TunnelStatus     `json:"status,omitempty"`
+	Version   string            `json:"version,omitempty"`
+	Update    *UpdateInfo       `json:"update,omitempty"`
+	SelfUp    *SelfUpdateResult `json:"selfUpdate,omitempty"`
+	Peers     *PeerList         `json:"peers,omitempty"`
+	Peer      map[string]any    `json:"peer,omitempty"`
+	Servers   []ServerRecord    `json:"servers,omitempty"`
+	Satellite *SatelliteResult  `json:"satellite,omitempty"`
 }
 
 func runNativeMessaging() error {
@@ -131,6 +135,24 @@ func handleNM(msg nmMessage) nmReply {
 			return reply
 		}
 		reply.OK, reply.Error, reply.Status = resp.OK, resp.Error, resp.Status
+		return reply
+	case "satellite_plan", "satellite_install":
+		// Установка спутника требует полного SSH (root) и выполняется прямо здесь.
+		dry := msg.Cmd == "satellite_plan"
+		if msg.DryRun != nil {
+			dry = *msg.DryRun
+		}
+		res, err := SatelliteRun(SatelliteRequest{
+			Host: msg.Host, Port: msg.SSHPort, User: msg.SSHUser,
+			Password: msg.Password, KeyPath: msg.KeyPath,
+			DryRun: dry, OpenFirewall: msg.OpenFirewall,
+		})
+		reply.Satellite = res
+		if err != nil {
+			reply.OK, reply.Error = false, err.Error()
+			return reply
+		}
+		reply.OK = true
 		return reply
 	case "peer_bootstrap", "peer_selftest", "peer_list", "peer_create", "peer_revoke", "peer_servers":
 		// Панель администратора. Не требует живого туннеля, поэтому выполняется

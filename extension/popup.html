@@ -150,6 +150,30 @@
       </div>
       <p class="hint" id="admKeyHint" style="margin:8px 0 0"></p>
     </div>
+
+    <div class="card" id="adminSatCard">
+      <h2>Спутник на 443</h2>
+      <p class="hint" style="margin:0 0 10px">
+        Если в сети разрешён только UDP 443 (так бывает за корпоративным VPN), поставьте на
+        сервер спутник: он слушает 443 и передаёт пакеты вашему AmneziaWG. Ключи и контейнер
+        не меняются, клиенту настраивать нечего.
+      </p>
+      <p class="hint" style="margin:0 0 10px">
+        Это системная служба от root, поэтому нужен полный SSH-доступ. Пароль используется
+        один раз и не сохраняется — ограниченный ключ панели такого намеренно не умеет.
+      </p>
+      <div class="kv"><span class="k">Адрес</span><input class="input" id="satHost" placeholder="vpn.example.com"></div>
+      <div class="kv"><span class="k">SSH-порт</span><input class="input" id="satPort" value="22"></div>
+      <div class="kv"><span class="k">Пользователь</span><input class="input" id="satUser" value="root"></div>
+      <div class="kv"><span class="k">Пароль</span><input class="input" id="satPassword" type="password" placeholder="не сохраняется"></div>
+      <div class="row wrap" style="margin-top:10px; gap:8px">
+        <button class="btn" id="btnSatPlan">Проверить</button>
+        <button class="btn accent" id="btnSatInstall">Установить</button>
+      </div>
+      <p class="hint" id="satHint" style="margin:8px 0 0"></p>
+      <pre class="mono" id="satOutput" hidden
+           style="margin:8px 0 0; padding:8px; background:#101012; border:1px solid #313136; border-radius:8px; white-space:pre-wrap; max-height:170px; overflow:auto; font-size:11px"></pre>
+    </div>
   </section>
 
   <!-- -------------------------------------------------------- Настройки -->

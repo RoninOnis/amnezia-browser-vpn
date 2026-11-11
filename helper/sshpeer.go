@@ -225,6 +225,33 @@ func (c *SSHClient) RunStdout(cmd string) (string, error) {
 	return out.String(), nil
 }
 
+// RunScriptArgs — то же, но с аргументами скрипта: `bash -s -- <args>`.
+func (c *SSHClient) RunScriptArgs(script string, args []string) (string, error) {
+	session, err := c.conn.NewSession()
+	if err != nil {
+		return "", err
+	}
+	defer session.Close()
+	cmd := "bash -s"
+	if len(args) > 0 {
+		cmd += " -- " + strings.Join(args, " ")
+	}
+	session.Stdin = strings.NewReader(script)
+	var out, errb bytes.Buffer
+	session.Stdout = &out
+	session.Stderr = &errb
+	err = session.Run(cmd)
+	// stderr скрипта — это его же пояснения, поэтому отдаём оба потока
+	text := out.String()
+	if errb.Len() > 0 {
+		if text != "" && !strings.HasSuffix(text, "\n") {
+			text += "\n"
+		}
+		text += errb.String()
+	}
+	return text, err
+}
+
 // RunScript отправляет скрипт на stdin `bash -s`. Так бутстрап не зависит от
 // кавычек в шелле и не упирается в длину командной строки.
 func (c *SSHClient) RunScript(script string) (string, error) {
