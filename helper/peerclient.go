@@ -25,12 +25,28 @@ type PeerInfo struct {
 }
 
 type PeerList struct {
-	Container  string     `json:"container"`
-	Config     string     `json:"config"`
-	Tool       string     `json:"tool,omitempty"`
-	ListenPort int        `json:"listenPort"`
-	Subnet     string     `json:"subnet"`
-	Peers      []PeerInfo `json:"peers"`
+	Container  string `json:"container"`
+	Config     string `json:"config"`
+	Tool       string `json:"tool,omitempty"`
+	ListenPort int    `json:"listenPort"`
+	Subnet     string `json:"subnet"`
+	ServerKey  string `json:"serverPublicKey"`
+	// Params — параметры обфускации строками "ключ=значение". Скрипт отдаёт их
+	// плоским списком: собирать JSON прямо в awk пришлось бы с тройным
+	// экранированием кавычек, и это уже ломалось.
+	Params []string   `json:"params"`
+	Peers  []PeerInfo `json:"peers"`
+}
+
+// ParamsMap разбирает параметры в map для сборки клиентского конфига.
+func (l *PeerList) ParamsMap() map[string]string {
+	out := make(map[string]string, len(l.Params))
+	for _, item := range l.Params {
+		if i := strings.Index(item, "="); i > 0 {
+			out[item[:i]] = item[i+1:]
+		}
+	}
+	return out
 }
 
 // PeerAdmin — обёртка над SSH-подключением к серверу.

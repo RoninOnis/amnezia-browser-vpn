@@ -159,6 +159,7 @@ func TestSSHListParsesServerJSON(t *testing.T) {
 	isolatedHome(t)
 	body, _ := json.Marshal(PeerList{
 		Container: "amnezia-awg2", Config: "awg0.conf", ListenPort: 36853, Subnet: "10.8.1.0/24",
+		ServerKey: "SERVERPUB=", Params: []string{"Jc=5", "S1=40", "HeaderProtectionKey=HPK="},
 		Peers: []PeerInfo{
 			{PublicKey: "PUB1=", AllowedIPs: "10.8.1.2/32", Name: "ноутбук", LastHandshake: 1700000000},
 			{PublicKey: "PUB2=", AllowedIPs: "10.8.1.3/32"},
@@ -184,6 +185,13 @@ func TestSSHListParsesServerJSON(t *testing.T) {
 	}
 	if len(list.Peers) != 2 || list.Peers[0].Name != "ноутбук" {
 		t.Fatalf("не разобраны пиры: %+v", list.Peers)
+	}
+	if list.ServerKey != "SERVERPUB=" {
+		t.Fatalf("не разобран публичный ключ сервера: %q", list.ServerKey)
+	}
+	params := list.ParamsMap()
+	if params["Jc"] != "5" || params["HeaderProtectionKey"] != "HPK=" {
+		t.Fatalf("не разобраны параметры обфускации: %+v", params)
 	}
 }
 

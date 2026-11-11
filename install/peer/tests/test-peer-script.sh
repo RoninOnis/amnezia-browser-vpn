@@ -23,6 +23,13 @@ cat > "$CONF_DIR/awg0.conf" <<'CONF'
 PrivateKey = SERVERPRIVATEKEY0000000000000000000000000000=
 ListenPort = 36853
 Address = 10.8.1.1/24
+Jc = 5
+Jmin = 50
+Jmax = 1000
+S1 = 40
+S2 = 60
+H1 = 1234567
+HeaderProtectionKey = HEADERPROTECTIONKEY000000000000000000000=
 
 [Peer]
 PublicKey = EXISTINGPEERKEY000000000000000000000000000000=
@@ -38,6 +45,7 @@ STATE="$WORK/applied.dump"
 case "\$1" in
   show)
     echo "show: args=[\$*]" >> "$WORK/shim.log"
+    if [ "\${3:-}" = "public-key" ]; then echo "SERVERPUBLICKEY0000000000000000000000000000="; exit 0; fi
     if [ "\${3:-}" = "dump" ]; then cat "\$STATE" 2>/dev/null; echo "--- dump выше ---" >> "$WORK/shim.log"; cat "\$STATE" >> "$WORK/shim.log" 2>/dev/null; exit 0; fi
     cat "\$STATE" 2>/dev/null || true
     ;;
@@ -88,6 +96,13 @@ echo "== list: один пир =="
 run list > "$WORK/l1.json"; cat "$WORK/l1.json"
 grep -q 'EXISTINGPEERKEY' "$WORK/l1.json" && check 1 "пир виден" || check 0 "пир виден"
 grep -q '"listenPort":36853' "$WORK/l1.json" && check 1 "порт из дампа" || check 0 "порт"
+
+echo "== list: публичный ключ сервера и параметры обфускации =="
+grep -q '"serverPublicKey":"SERVERPUBLICKEY' "$WORK/l1.json" && check 1 "публичный ключ сервера отдан" || check 0 "публичный ключ сервера отдан"
+grep -q '"Jc=5"' "$WORK/l1.json" && check 1 "Jc в параметрах" || check 0 "Jc в параметрах"
+grep -q '"HeaderProtectionKey=' "$WORK/l1.json" && check 1 "HeaderProtectionKey в параметрах" || check 0 "HeaderProtectionKey в параметрах"
+grep -q 'комментарий' "$WORK/l1.json" && no "комментарии не попали в параметры" || check 1 "комментарии не попали в параметры"
+grep -q 'SERVERPRIVATEKEY' "$WORK/l1.json" && no "приватный ключ сервера НЕ утёк" || check 1 "приватный ключ сервера не утёк"
 
 echo "== add: свободный адрес .3, а не занятый .2 =="
 PUB1="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="

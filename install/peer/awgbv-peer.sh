@@ -103,6 +103,38 @@ conf_subnet() {  # имя конфига
 
 conf_read() { in_ctr "cat '$CONF_DIR/$1'"; }
 
+# Публичный ключ сервера нужен клиенту для его конфига. Приватный не отдаём
+# никогда: он остаётся только на сервере.
+conf_public_key() {  # имя конфига
+  local conf="$1" iface="${1%.conf}" pk=""
+  # ключ WireGuard/AmneziaWG — base64 на 43 символа плюс «=»; всё остальное
+  # (например, целый дамп от старого awg) отбрасываем
+  is_key() { [ "${#1}" -ge 43 ] && [ "${#1}" -le 44 ] && case "$1" in *[!A-Za-z0-9+/=]*) return 1;; esac; }
+  pk=$(in_ctr "$tool_name show '$iface' public-key 2>/dev/null || true" | tr -d '\r\n ' || true)
+  is_key "$pk" || pk=""
+  if [ -z "$pk" ]; then
+    # запасной путь: посчитать из приватного ключа, не выводя его наружу
+    pk=$(in_ctr "awk -F' = ' '/^PrivateKey/{print \$2; exit}' '$CONF_DIR/$conf' | $tool_name pubkey 2>/dev/null || true" | tr -d '\r\n ' || true)
+    is_key "$pk" || pk=""
+  fi
+  printf '%s' "$pk"
+}
+
+# Параметры обфускации AmneziaWG — общие для сервера и клиента. Без них
+# handshake не пройдёт, поэтому клиентский конфиг собирается только с ними.
+# Печатает ПЛОСКИЕ строки "ключ=значение": собирать JSON прямо в awk пришлось бы
+# с тройным экранированием кавычек, а разбирать такой вывод потом всё равно в Go.
+conf_params() {  # имя конфига
+  # Никаких двойных кавычек внутри: строка идёт в bash -c внутри "...", и bash
+  # съел бы "" (awk получал sub(/…/, , line) — синтаксическая ошибка).
+  # Берём только блок [Interface]: Jc/S1/H1 описывают сервер, а не пиров.
+  # диапазон /^\[Interface\]/,/^\[/ не годится: конечный шаблон совпадает с самой
+  # первой строкой, и блок получается пустым. Поэтому флаг.
+  in_ctr "awk '/^\[Interface\]/{f=1;next} /^\[/{f=0} f' '$CONF_DIR/$1' \
+    | grep -E '^(Jc|Jmin|Jmax|S1|S2|S3|S4|H1|H2|H3|H4|I1|I2|I3|I4|I5|HeaderProtectionKey)[[:space:]]*=' \
+    | tr -d ' \t' | sed 's/[#].*//' || true"
+}
+
 # атомарная запись: сначала .tmp рядом, потом подмена; бэкап уже сделан
 conf_write() {  # stdin -> конфиг
   local conf="$1" tmp="$CONF_DIR/$1.tmp"
@@ -154,12 +186,17 @@ meta_text() { in_ctr "cat '$META_FILE' 2>/dev/null || true"; }
 # --- вывод -----------------------------------------------------------------
 
 peers_json() {  # conf
-  local conf="$1" iface="${1%.conf}" dump subnet names
+  local conf="$1" iface="${1%.conf}" dump subnet names pubkey params
   dump=$(in_ctr "$tool_name show '$iface' dump" 2>/dev/null) || die "не удалось получить список пиров"
   subnet=$(conf_subnet "$conf")
   names=$(meta_text)
+  pubkey=$(conf_public_key "$conf")
+  # параметры обфускации — массив строк "ключ=значение", JSON собирает Go
+  params=$(conf_params "$conf" | awk 'NF { printf "%s\"%s\"", (n++ ? "," : ""), $0 }' || true)
+  [ -n "${AWGBV_PEER_DEBUG:-}" ] && log "debug: pubkey='$pubkey' params='$params'"
 
-  printf '%s' "$dump" | awk -v subnet="$subnet" -v names="$names" -v conf="$conf" -v ctr="${CTR}" '
+  printf '%s' "$dump" | awk -v subnet="$subnet" -v names="$names" -v conf="$conf" -v ctr="${CTR}" \
+      -v pubkey="$pubkey" -v params="$params" '
     function esc(s){ gsub(/\\/,"\\\\",s); gsub(/"/,"\\\"",s); return s }
     function name_of(pub,  n,i,parts,line){
       n = split(names, parts, "\n")
@@ -171,7 +208,8 @@ peers_json() {  # conf
     }
     NR==1 {
       printf "{\"container\":\"%s\",\"config\":\"%s\",", esc(ctr), esc(conf)
-      printf "\"listenPort\":%s,\"subnet\":\"%s\",\"peers\":[", ($3+0), esc(subnet)
+      printf "\"listenPort\":%s,\"subnet\":\"%s\",", ($3+0), esc(subnet)
+      printf "\"serverPublicKey\":\"%s\",\"params\":[%s],\"peers\":[", esc(pubkey), params
       next
     }
     {
