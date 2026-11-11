@@ -200,6 +200,23 @@ function renderServers() {
   }
 }
 
+// Сообщение о добавлении сайта живёт несколько секунд: опрос перерисовывает
+// экран каждые 4 с, и без этого подсказка исчезала раньше, чем её прочли.
+let sitesMsg = "";
+let sitesMsgAt = 0;
+let sitesMsgKind = "";
+
+function siteMsg(text, kind) {
+  sitesMsg = text;
+  sitesMsgKind = kind || "";
+  sitesMsgAt = Date.now();
+  const box = $("#sitesHint");
+  if (box) {
+    box.textContent = text;
+    box.className = "hint" + (kind ? " " + kind : "");
+  }
+}
+
 function renderSites() {
   const s = state;
   const list = activeList === "whitelist" ? s.whitelist : s.blacklist;
@@ -215,9 +232,15 @@ function renderSites() {
   badge.textContent = mode === "whitelist" ? "режим: только список" : "режим: всё кроме списка";
   badge.className = "badge " + (mode === "whitelist" ? "accent" : "");
 
-  $("#sitesHint").textContent = activeList === "whitelist"
-    ? "Только сайты из этого списка пойдут через VPN. Пока список пуст — через VPN идёт всё, кроме «Напрямую»."
-    : "Эти адреса всегда идут напрямую, мимо туннеля. Приоритет выше, чем у списка «Через VPN».";
+  if (sitesMsg && Date.now() - sitesMsgAt < 6000) {
+    $("#sitesHint").textContent = sitesMsg;
+    $("#sitesHint").className = "hint" + (sitesMsgKind ? " " + sitesMsgKind : "");
+  } else {
+    $("#sitesHint").textContent = activeList === "whitelist"
+      ? "Только сайты из этого списка пойдут через VPN. Пока список пуст — через VPN идёт всё, кроме «Напрямую»."
+      : "Эти адреса всегда идут напрямую, мимо туннеля. Приоритет выше, чем у списка «Через VPN».";
+    $("#sitesHint").className = "hint";
+  }
 
   const box = $("#sitesList");
   box.innerHTML = "";
@@ -408,6 +431,15 @@ const PANEL_BUTTONS = [
 
 let shownKeyLink = ""; // какая ссылка уже показана: подсказку прошлой карточки не тащим
 
+// Одна операция с сервером за раз. Раньше лишние кнопки просто отключались на
+// время фоновой загрузки списка: пользователь жал «Подключить» и не получал
+// ничего — ни действия, ни сообщения. Теперь нажатие объясняет причину.
+function panelBusy(hintSelector) {
+  if (!(state.peerBusy || state.satelliteBusy)) return false;
+  setHint(hintSelector, "Сейчас идёт другая операция с сервером — дождитесь её окончания", "warn");
+  return true;
+}
+
 function renderAdmin() {
   const s = state;
   const servers = s.servers || [];
@@ -445,8 +477,13 @@ function renderAdmin() {
     body.appendChild(el("div", "peer-meta", `${peer.allowedIps || "адрес не задан"} · ${ago}`));
     item.appendChild(body);
     const del = el("button", "btn danger small", "Отозвать");
-    del.disabled = busy;
+    // На время операции кнопка помечается, но НЕ блокируется: заблокированная
+    // кнопка молчит, и человек решает, что интерфейс сломался. Нажатие должно
+    // объяснить, что происходит.
+    del.classList.toggle("busy", busy);
+    del.setAttribute("aria-disabled", busy ? "true" : "false");
     del.addEventListener("click", async () => {
+      if (panelBusy("#admPeerHint")) return;
       if (!confirm(`Отозвать ключ «${peerLabel(peer)}»? Устройство потеряет доступ.`)) return;
       const res = await send("revokePeer", { publicKey: peer.publicKey });
       if (res && res.state) {
@@ -516,9 +553,12 @@ function renderAdmin() {
     if (input && !input.value && server) input.value = server;
   }
 
+  // Кнопки не отключаем: помечаем «занято», а обработчик объяснит причину.
   for (const sel of PANEL_BUTTONS) {
     const btn = $(sel);
-    if (btn) btn.disabled = busy;
+    if (!btn) continue;
+    btn.classList.toggle("busy", busy);
+    btn.setAttribute("aria-disabled", busy ? "true" : "false");
   }
 }
 
@@ -609,20 +649,73 @@ for (const btn of $$("#sitesTabs button")) {
   });
 }
 
+// Приводит введённый адрес к домену. Возвращает "" если это не похоже на сайт:
+// люди вставляют «https://youtube.com/watch?v=…», «YOUTUBE.COM», «*.example.com»,
+// «яндекс.рф», а иногда просто текст («два через запятую»), и молча сохранять
+// такой текст в список — значит обещать фильтрацию, которой не будет.
 function normalizeHost(raw) {
   let h = String(raw || "").trim().toLowerCase();
   if (!h) return "";
-  h = h.replace(/^https?:\/\//, "").replace(/^\/\//, "");
+  h = h.replace(/^[a-z]+:\/\//, "").replace(/^\/\//, "");
   h = h.split("/")[0].split("?")[0].split("#")[0];
   h = h.split("@").pop();
-  if (h.startsWith("*.")) return h; // wildcard оставляем как есть
-  h = h.split(":")[0];
-  return h.replace(/\.$/, "");
+  h = h.split(":")[0].replace(/\.$/, "");
+
+  let wildcard = false;
+  if (h.startsWith("*.")) {
+    wildcard = true;
+    h = h.slice(2);
+  }
+  if (!h) return "";
+  // кириллические домены приводим к тому виду, который приходит в запросах
+  if (/[^\x00-\x7f]/.test(h)) {
+    try {
+      h = new URL("http://" + h).hostname;
+    } catch (err) {
+      return "";
+    }
+  }
+  if (h === "localhost") return h;
+  // домен: хотя бы одна точка, метки из букв/цифр/дефисов, TLD не из дефисов
+  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(h)) {
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return "";
+  }
+  return wildcard ? "*." + h : h;
+}
+
+// Пользователь часто вставляет несколько адресов сразу: «youtube.com, vk.com»
+// или списком из мессенджера. Разбираем по запятым/пробелам/переносам, а мусор
+// показываем, а не сохраняем молча.
+function splitSites(raw) {
+  return String(raw || "").split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
 }
 
 async function addSite(raw) {
+  const parts = splitSites(raw);
+  if (!parts.length) return false;
+  if (parts.length > 1) {
+    let added = 0;
+    const rejected = [];
+    for (const part of parts) {
+      if (await addOneSite(part)) added += 1;
+      else if (!normalizeHost(part)) rejected.push(part);
+    }
+    if (rejected.length) {
+      siteMsg("не похоже на адрес сайта: " + rejected.join(", "), "err");
+    } else if (added) {
+      siteMsg(`добавлено сайтов: ${added}`);
+    }
+    return added > 0;
+  }
+  return addOneSite(parts[0]);
+}
+
+async function addOneSite(raw) {
   const host = normalizeHost(raw);
-  if (!host) return false;
+  if (!host) {
+    siteMsg(`«${String(raw || "").trim()}» не похоже на адрес сайта — нужен домен вида example.com`, "err");
+    return false;
+  }
   const s = state;
   const other = activeList === "whitelist" ? s.blacklist : s.whitelist;
   if (other.includes(host)) {
@@ -817,9 +910,32 @@ $("#btnCheckUpdates").addEventListener("click", async () => {
 
 /* ---------------------------------------------------------------- Панель */
 
+// Адрес сервера в форме подключения: снимаем схему, слэш и пробелы, а порт,
+// случайно набранный в той же строке («vpn.ru:2222»), переносим в поле порта.
+// Хелпер тоже это умеет, но попап не должен отправлять заведомый мусор.
+function panelHost(raw) {
+  let text = String(raw || "").trim();
+  if (!text) return { host: "", port: "" };
+  text = text.replace(/^[a-z]+:\/\//i, "").replace(/^\/\//, "");
+  text = text.split("/")[0].split("?")[0].split("#")[0];
+  text = text.split("@").pop();
+  let port = "";
+  const m = text.match(/^(\[[^\]]+\]|[^:]+):(\d{1,5})$/);
+  if (m) {
+    text = m[1];
+    port = m[2];
+  }
+  return { host: text.replace(/^\[|\]$/g, ""), port };
+}
+
 $("#btnAdminConnect").addEventListener("click", async () => {
+  if (panelBusy("#admConnectHint")) return;
   const btn = $("#btnAdminConnect");
-  const host = $("#admHost").value.trim();
+  const parsedHost = panelHost($("#admHost").value);
+  const host = parsedHost.host;
+  if (parsedHost.port && !$("#admPort").value.trim()) {
+    $("#admPort").value = parsedHost.port;
+  }
   const password = $("#admPassword").value;
   if (!host) {
     setHint("#admConnectHint", "Укажите адрес сервера", "err");
@@ -867,6 +983,7 @@ $("#btnAdminAnother").addEventListener("click", () => {
 });
 
 $("#btnAdminRefresh").addEventListener("click", async () => {
+  if (panelBusy("#admPeerHint")) return;
   const res = await send("loadPeers", {});
   if (res && res.state) {
     state = res.state;
@@ -876,6 +993,7 @@ $("#btnAdminRefresh").addEventListener("click", async () => {
 });
 
 $("#btnAdminCreate").addEventListener("click", async () => {
+  if (panelBusy("#admPeerHint")) return;
   const name = prompt("Имя устройства (например, «ноутбук»):", "клиент");
   if (name === null) return;
   const btn = $("#btnAdminCreate");
@@ -967,8 +1085,12 @@ async function runSat(dryRun) {
   }
 }
 
-$("#btnSatPlan").addEventListener("click", () => runSat(true));
+$("#btnSatPlan").addEventListener("click", () => {
+  if (panelBusy("#satHint")) return null;
+  return runSat(true);
+});
 $("#btnSatInstall").addEventListener("click", async () => {
+  if (panelBusy("#satHint")) return;
   if (!confirm("Поставить на сервер системную службу awgbv-satellite (UDP/443)?")) return;
   await runSat(false);
 });

@@ -28,8 +28,23 @@ async function awgbvInflate(bytes) {
 }
 
 async function awgbvDecodeVpn(json) {
-  const link = typeof json === "string" ? json : json && json.link;
-  const raw = awgbvBase64UrlToBytes(link);
+  const link = String((typeof json === "string" ? json : json && json.link) || "").trim();
+  // Люди вставляют в это поле всё что угодно: ссылку на видео, обрезанный ключ,
+  // пустую строку. Раньше в этом случае вылетало английское «String contains an
+  // invalid character» из atob — теперь объясняем по-человечески и заранее.
+  if (!link) throw new Error("ссылка пустая — вставьте ключ vpn:// из Amnezia");
+  if (!/^vpn:\/\//i.test(link)) {
+    throw new Error("это не ключ Amnezia: ссылка должна начинаться с vpn://");
+  }
+  let raw;
+  try {
+    raw = awgbvBase64UrlToBytes(link);
+  } catch (err) {
+    throw new Error("ссылку не удалось прочитать — скопируйте её целиком, без пробелов и переносов");
+  }
+  if (!raw || raw.length < 8) {
+    throw new Error("ссылка обрезана — скопируйте её целиком");
+  }
   const candidates = [];
   if (raw.length > 4) candidates.push(raw.subarray(4));
   candidates.push(raw);

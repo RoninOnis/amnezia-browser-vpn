@@ -195,6 +195,9 @@ button.btn.ghost { background: transparent; }
 button.btn.danger { border-color: rgba(248, 113, 113, .45); color: var(--err); background: transparent; }
 button.btn.small { padding: 5px 9px; font-size: 11.5px; }
 button.btn:disabled { opacity: .45; cursor: default; }
+/* «Занято» — не блокировка: кнопка нажимается и объясняет причину */
+button.btn.busy,
+button.btn[aria-disabled="true"] { opacity: .55; cursor: progress; }
 
 /* --------------------------------------------------------- главный экран */
 

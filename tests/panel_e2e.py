@@ -80,7 +80,7 @@ class Collector:
         self.httpd.shutdown()
 
 
-def build_extension(port):
+def build_extension(port, probe_name="panel_ui_probe.js"):
     shutil.rmtree(TESTEXT, ignore_errors=True)
     shutil.copytree(EXT, TESTEXT)
 
@@ -97,7 +97,7 @@ def build_extension(port):
     src += "\nbrowser.tabs.create({ url: browser.runtime.getURL('popup.html') });\n"
     open(bg, "w", encoding="utf-8").write(src)
 
-    probe = open(os.path.join(ROOT, "tests", "panel_ui_probe.js"), encoding="utf-8").read()
+    probe = open(os.path.join(ROOT, "tests", probe_name), encoding="utf-8").read()
     open(os.path.join(TESTEXT, "test-driver.js"), "w", encoding="utf-8").write(
         probe.replace("__PORT__", str(port)))
 
@@ -181,9 +181,12 @@ def main():
     ap.add_argument("--state", required=True, help="каталог состояния хелпера с servers.json")
     ap.add_argument("--expect-ip", default="", help="IP сервера для проверки выпущенного профиля")
     ap.add_argument("--timeout", type=int, default=300)
+    ap.add_argument("--probe", default="panel_ui_probe.js",
+                    help="какой драйвер внедрять в попап (tests/<имя>)")
+    ap.add_argument("--no-cleanup", action="store_true", help="не отзывать выпущенный ключ")
     args = ap.parse_args()
 
-    xpi = build_extension(PORT)
+    xpi = build_extension(PORT, args.probe)
     prepare_profile(xpi)
     install_native_manifest()
     seed_state(args.state)
@@ -249,7 +252,7 @@ def main():
 
         # уборка: выпущенный ключ отзываем, чтобы на сервере не оставалось сирот
         key_pub = payload.get("keyPublicKey") or ""
-        if key_pub:
+        if key_pub and not args.no_cleanup:
             subprocess.run([BIN, "--stop"], env=env, capture_output=True)
             revoked, err = revoke_via_helper(key_pub, panel_host())
             print(("  OK  " if revoked else "FAIL") + " тестовый ключ отозван после проверки"

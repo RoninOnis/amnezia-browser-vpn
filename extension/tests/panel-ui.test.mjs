@@ -59,6 +59,18 @@ function makeEl(tag = "div") {
       children.push(child);
       return child;
     },
+    attributes: {},
+    setAttribute(name, val) {
+      node.attributes[name] = String(val);
+    },
+    getAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(node.attributes, name)
+        ? node.attributes[name]
+        : null;
+    },
+    removeAttribute(name) {
+      delete node.attributes[name];
+    },
     addEventListener(type, fn) {
       (handlers[type] = handlers[type] || []).push(fn);
     },
@@ -314,7 +326,7 @@ test("ключи на сервере рисуются строками спис�
     assert.ok(button.classList.contains("btn"));
     assert.ok(button.classList.contains("danger"));
     assert.equal(button.textContent, "Отозвать");
-    assert.equal(button.disabled, false);
+    assert.notEqual(button.getAttribute("aria-disabled"), "true");
   }
 });
 
@@ -326,14 +338,16 @@ test("во время SSH-операции отключены все кнопк�
     "#btnAdminConnect", "#btnAdminRefresh", "#btnAdminCreate",
     "#btnAdminCopy", "#btnAdminAdopt", "#btnSatPlan", "#btnSatInstall",
   ]) {
-    assert.equal(el(ui, selector).disabled, true, `${selector} должен ждать`);
+    assert.equal(el(ui, selector).getAttribute("aria-disabled"), "true",
+      `${selector} должен быть помечен занятым`);
   }
   const revoke = el(ui, "#admPeers").children[0].children.at(-1);
-  assert.equal(revoke.disabled, true);
+  assert.equal(revoke.getAttribute("aria-disabled"), "true");
 
   await renderWith(ui, makeState({ satelliteBusy: true }));
-  assert.equal(el(ui, "#btnSatInstall").disabled, true, "занятость спутника тоже блокирует панель");
-  assert.equal(el(ui, "#btnAdminCreate").disabled, true);
+  assert.equal(el(ui, "#btnSatInstall").getAttribute("aria-disabled"), "true",
+    "занятость спутника тоже помечает панель");
+  assert.equal(el(ui, "#btnAdminCreate").getAttribute("aria-disabled"), "true");
 });
 
 test("ошибка панели показывается красным .hint.err", async () => {

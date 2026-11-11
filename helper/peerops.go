@@ -293,11 +293,18 @@ func PeerCreate(host string, port int, name string) (map[string]any, error) {
 			"error": "пир добавлен, но ссылку собрать не удалось: " + err.Error(),
 		}, nil
 	}
+	// имя берём из ответа сервера: он схлопывает пробелы, убирает переводы строк
+	// и подставляет «устройство», если имя пустое — иначе в списке показывалось
+	// одно, а на сервере хранилось другое
+	shown := info.Name
+	if shown == "" {
+		shown = name
+	}
 	return map[string]any{
 		"ok":         true,
 		"publicKey":  keys.PublicKey,
 		"allowedIps": info.AllowedIPs,
-		"name":       name,
+		"name":       shown,
 		"vpnLink":    link,
 	}, nil
 }

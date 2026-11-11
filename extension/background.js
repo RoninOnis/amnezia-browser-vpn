@@ -782,7 +782,12 @@ async function addProfile(link) {
       profile: { id: existing.id, name: existing.name, endpoint: existing.endpoint },
     };
   }
-  const parsed = await awgbvDecodeVpn(link);
+  let parsed;
+  try {
+    parsed = await awgbvDecodeVpn(clean);
+  } catch (err) {
+    return { ok: false, error: (err && err.message) || "не удалось прочитать ссылку" };
+  }
   const id = "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const entry = {
     id,

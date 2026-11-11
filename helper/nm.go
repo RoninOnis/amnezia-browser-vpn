@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -29,13 +30,13 @@ type nmMessage struct {
 	RelayToken   string   `json:"relayToken,omitempty"`
 	Force        bool     `json:"force,omitempty"`
 	// панель администратора
-	Host      string `json:"host,omitempty"`
-	SSHPort   int    `json:"sshPort,omitempty"`
-	SSHUser   string `json:"sshUser,omitempty"`
-	Password  string `json:"password,omitempty"`
-	KeyPath   string `json:"keyPath,omitempty"`
-	Name      string `json:"name,omitempty"`
-	PublicKey string `json:"publicKey,omitempty"`
+	Host      string       `json:"host,omitempty"`
+	SSHPort   flexiblePort `json:"sshPort,omitempty"`
+	SSHUser   string       `json:"sshUser,omitempty"`
+	Password  string       `json:"password,omitempty"`
+	KeyPath   string       `json:"keyPath,omitempty"`
+	Name      string       `json:"name,omitempty"`
+	PublicKey string       `json:"publicKey,omitempty"`
 	// спутник сервера
 	DryRun       *bool `json:"dryRun,omitempty"`
 	OpenFirewall bool  `json:"openFirewall,omitempty"`
@@ -74,7 +75,9 @@ func runNativeMessaging() error {
 		var msg nmMessage
 		reply := nmReply{}
 		if err := json.Unmarshal(buf, &msg); err != nil {
-			reply = nmReply{OK: false, Error: "bad json"}
+			// «bad json» ничего не говорит пользователю: показываем, что именно
+			// не так, если это можно понять (например, порт введён словами).
+			reply = nmReply{OK: false, Error: humanParseError(err)}
 		} else {
 			reply = handleNM(msg)
 		}
@@ -116,7 +119,51 @@ func waitSettled(timeout time.Duration) *TunnelStatus {
 	return last
 }
 
+// humanParseError переводит ошибку разбора кадра в понятный текст.
+func humanParseError(err error) string {
+	text := err.Error()
+	switch {
+	case strings.Contains(text, "порт SSH"):
+		return text
+	case strings.Contains(text, "cannot unmarshal"):
+		// типовое: в числовое поле прислали не число
+		return "не понял значение в запросе — проверьте, что в полях числа, а не текст"
+	default:
+		return "не понял запрос от расширения, попробуйте ещё раз"
+	}
+}
+
+// normalizePanelInput приводит ввод пользователя к рабочему виду один раз, до
+// разбора по командам: люди вставляют «https://vpn.ru/», «vpn.ru:2222» или
+// оставляют поле порта пустым, и раньше это либо ломало разбор кадра, либо
+// уходило в ssh как есть и давало подсказку не про свою ошибку.
+func normalizePanelInput(msg *nmMessage) {
+	if strings.TrimSpace(msg.Host) == "" {
+		return
+	}
+	clean, hostPort := normalizeHost(msg.Host)
+	msg.Host = clean
+	if msg.SSHPort.Int() == 0 && hostPort > 0 {
+		msg.SSHPort = flexiblePort(hostPort)
+	}
+}
+
+// команды, которым обязателен адрес сервера: без него раньше получалось
+// «сервер :22 не принял логин или пароль» — то есть подсказка не про ошибку
+func needsHost(cmd string) bool {
+	switch cmd {
+	case "peer_bootstrap", "peer_selftest", "peer_list", "peer_create", "peer_revoke",
+		"satellite_plan", "satellite_install":
+		return true
+	}
+	return false
+}
+
 func handleNM(msg nmMessage) nmReply {
+	normalizePanelInput(&msg)
+	if needsHost(msg.Cmd) && msg.Host == "" {
+		return nmReply{ID: msg.ID, OK: false, Error: "не указан адрес сервера — впишите IP или домен, например 203.0.113.10"}
+	}
 	reply := nmReply{ID: msg.ID, OK: true}
 	switch msg.Cmd {
 	case "ping":
@@ -143,7 +190,7 @@ func handleNM(msg nmMessage) nmReply {
 			dry = *msg.DryRun
 		}
 		res, err := SatelliteRun(SatelliteRequest{
-			Host: msg.Host, Port: msg.SSHPort, User: msg.SSHUser,
+			Host: msg.Host, Port: msg.SSHPort.Int(), User: msg.SSHUser,
 			Password: msg.Password, KeyPath: msg.KeyPath,
 			DryRun: dry, OpenFirewall: msg.OpenFirewall,
 		})
@@ -260,7 +307,7 @@ func handlePeer(msg nmMessage, reply nmReply) nmReply {
 		reply.Servers = loadServers()
 	case "peer_bootstrap":
 		res, err := PeerBootstrap(BootstrapRequest{
-			Host: msg.Host, Port: msg.SSHPort, User: msg.SSHUser,
+			Host: msg.Host, Port: msg.SSHPort.Int(), User: msg.SSHUser,
 			Password: msg.Password, KeyPath: msg.KeyPath,
 		})
 		if err != nil {
@@ -271,21 +318,21 @@ func handlePeer(msg nmMessage, reply nmReply) nmReply {
 		reply.Peer = res
 		reply.Servers = loadServers()
 	case "peer_selftest":
-		list, err := PeerSelftest(msg.Host, msg.SSHPort)
+		list, err := PeerSelftest(msg.Host, msg.SSHPort.Int())
 		if err != nil {
 			reply.OK, reply.Error = false, err.Error()
 			return reply
 		}
 		reply.OK, reply.Peers = true, list
 	case "peer_list":
-		list, err := PeerListPeers(msg.Host, msg.SSHPort)
+		list, err := PeerListPeers(msg.Host, msg.SSHPort.Int())
 		if err != nil {
 			reply.OK, reply.Error = false, err.Error()
 			return reply
 		}
 		reply.OK, reply.Peers = true, list
 	case "peer_create":
-		res, err := PeerCreate(msg.Host, msg.SSHPort, msg.Name)
+		res, err := PeerCreate(msg.Host, msg.SSHPort.Int(), msg.Name)
 		if err != nil {
 			reply.OK, reply.Error = false, err.Error()
 			return reply
@@ -308,7 +355,7 @@ func handlePeer(msg nmMessage, reply nmReply) nmReply {
 			}
 		}
 	case "peer_revoke":
-		if err := PeerRevoke(msg.Host, msg.SSHPort, msg.PublicKey); err != nil {
+		if err := PeerRevoke(msg.Host, msg.SSHPort.Int(), msg.PublicKey); err != nil {
 			reply.OK, reply.Error = false, err.Error()
 			return reply
 		}
