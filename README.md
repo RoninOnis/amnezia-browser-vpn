@@ -154,15 +154,23 @@ awgbv --foreground --port 443 --connect ./profile.conf   # только 443 (п�
 
 ```
 tunnel up: 10.8.1.14 -> 203.0.113.10:36853, mtu 1376, socks5 127.0.0.1:33939
-handshake ok after 501ms (mtu 1376, endpoint 203.0.113.10:36853)      # всё в порядке
-no handshake with mtu 1376 in 8s, trying lower                        # MTU велик или UDP режется
-connect: no handshake with mtu 1200 (UDP may be blocked)              # UDP не проходит вообще
+handshake ok after 501ms (mtu 1376, endpoint 203.0.113.10:36853)   # всё в порядке
+
+no handshake on port 36853 mtu 1376 in 4s, next attempt            # штатный порт молчит
+trying port 443 mtu 1376 (попытка 2 из 2)                          # проверяем спутник
+tunnel works with port 443 mtu 1376 (profile had port 36853 mtu 1376)
+
+connect: no handshake on port 443 mtu 1240 (UDP may be blocked)    # не проходит вообще
 ```
 
 `--mtu 1280` задаёт MTU вручную, `--port 443` — порт сервера (или спутника).
 
 Строка `handshake ok` пишется один раз при подключении — именно её отсутствие раньше сбивало
-диагностику. Если подключение идёт через спутник, в ней будет видно порт 443:
+диагностику. Порядок попыток: штатный порт профиля → **443 тем же MTU** → понижение MTU на обоих
+портах. 443 вторым шагом не случайно: если он стоял после всей лестницы, до него доходило только
+через 16 с, и расширение успевало перезапустить подключение раньше.
+
+Если подключение идёт через спутник, в статусе будет видно порт 443 и `portAuto: true`:
 
 ```
 tunnel up: 10.8.1.14 -> 203.0.113.10:443, mtu 1280, socks5 127.0.0.1:33939
