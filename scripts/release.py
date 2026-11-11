@@ -59,14 +59,22 @@ def sha256(path):
     return h.hexdigest()
 
 
-def collect(version, require_xpi=True):
+def collect(version, require_xpi=True, xpi_path=""):
     """Собирает площадку релиза и возвращает список предупреждений."""
     warn = []
     if os.path.isdir(STAGE):
         shutil.rmtree(STAGE)
     os.makedirs(STAGE)
 
-    xpis = sorted(glob.glob(f"{ROOT}/dist/signed/*{version}*.xpi"))
+    if xpi_path:
+        # тестовый релиз до подписи: кладём неподписанный .xpi и предупреждаем,
+        # что Firefox его не поставит без xpinstall.signatures.required=false
+        shutil.copy(xpi_path, f"{STAGE}/amnezia-browser-vpn-{version}.xpi")
+        warn.append(f"в релиз идёт НЕподписанный .xpi ({os.path.basename(xpi_path)}) — "
+                    "Firefox поставит его только с выключенной проверкой подписей")
+        xpis = []
+    else:
+        xpis = sorted(glob.glob(f"{ROOT}/dist/signed/*{version}*.xpi"))
     if xpis:
         shutil.copy(xpis[-1], f"{STAGE}/amnezia-browser-vpn-{version}.xpi")
     elif require_xpi:
@@ -115,11 +123,18 @@ def main():
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--publish", action="store_true")
     ap.add_argument("--notes-file")
+    # тестовый релиз: свой тег (например v0.3.7-develop.1), пометка pre-release и
+    # возможность положить НЕподписанный .xpi, пока AMO ещё не подписал
+    ap.add_argument("--tag", default="", help="тег релиза (по умолчанию v<version>)")
+    ap.add_argument("--target", default="", help="ветка, от которой ставится тег")
+    ap.add_argument("--prerelease", action="store_true")
+    ap.add_argument("--xpi", default="", help="путь к неподписанному .xpi для теста")
     args = ap.parse_args()
     if not (args.check or args.publish):
         sys.exit("укажите --check или --publish")
 
-    warn = collect(args.version, require_xpi=not args.check)
+    warn = collect(args.version, require_xpi=not args.check and not args.xpi,
+                   xpi_path=args.xpi)
     print(f"площадка: {STAGE}")
     for name in sorted(os.listdir(STAGE)):
         size = os.path.getsize(os.path.join(STAGE, name))
@@ -161,17 +176,23 @@ def main():
             print("  до публикации осталось: подписать .xpi (./install/sign.sh) — только с одобрения")
         return
 
-    tag = f"v{args.version}"
+    tag = args.tag or f"v{args.version}"
+    suffix = tag[len(f"v{args.version}"):].strip("-")
+    # имя релиза — только название и номер, как договорились
     name = f"Amnezia Browser VPN {args.version}"
+    if suffix:
+        name += f" ({suffix})"
     notes = open(args.notes_file).read() if args.notes_file else f"Релиз {args.version}."
 
     for rel in api(f"/repos/{REPO}/releases"):
         if rel["tag_name"] == tag:
             sys.exit(f"error: релиз {tag} уже существует — номер не переиспользуем")
 
-    rel = api(f"/repos/{REPO}/releases",
-              {"tag_name": tag, "name": name, "body": notes, "draft": False, "prerelease": False},
-              method="POST")
+    payload = {"tag_name": tag, "name": name, "body": notes,
+               "draft": False, "prerelease": bool(args.prerelease)}
+    if args.target:
+        payload["target_commitish"] = args.target
+    rel = api(f"/repos/{REPO}/releases", payload, method="POST")
     print("релиз:", rel["id"], rel["html_url"])
 
     for fname in sorted(os.listdir(STAGE)):
