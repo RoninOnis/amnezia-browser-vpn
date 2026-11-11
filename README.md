@@ -85,10 +85,26 @@ powershell -ExecutionPolicy Bypass -File install\windows\install.ps1 -Binary dis
 
 ### 3. Подключить расширение
 
-* Для разработки: `about:debugging` → «Это Firefox» → «Загрузить временное дополнение» →
-  `extension/manifest.json` (временное дополнение живёт до перезапуска браузера).
-* Постоянно: собрать `.xpi` и подписать его на AMO (unlisted). ID фиксирован —
-  `awgbv@0xoni.ru`, от него зависит native messaging.
+**Постоянно (рекомендуется).** Возьмите подписанный `.xpi` из
+[releases](https://github.com/RoninOnis/amnezia-browser-vpn/releases) и поставьте его:
+`about:addons` → шестерёнка → «Установить дополнение из файла» → выбрать `.xpi`.
+Дополнение подписано на addons.mozilla.org по каналу **unlisted** (self-distribution):
+оно не публикуется в каталоге AMO и не ищется в нём, ставится только файлом, но
+release-сборка Firefox принимает его как обычное дополнение — оно переживает перезапуск.
+
+**Для разработки.** `about:debugging` → «Это Firefox» → «Загрузить временное дополнение» →
+`extension/manifest.json` (живёт до перезапуска браузера).
+
+**Пересобрать и подписать самому:**
+
+```bash
+./install/build.sh                       # бинари хелпера
+./install/sign.sh                        # → dist/signed/<slug>-<version>.xpi
+```
+
+`install/sign.sh` берёт ключ из `AMO_API_KEY`/`AMO_API_SECRET` либо из
+`~/.hermes/amo_creds.yaml` (см. шапку скрипта). ID дополнения фиксирован —
+`awgbv@0xoni.ru`: от него зависит native messaging, менять нельзя.
 
 ### 4. Добавить ключ
 
