@@ -152,7 +152,9 @@ def seed_state(src_state):
         src = os.path.join(src_state, name)
         if os.path.exists(src):
             shutil.copy(src, os.path.join(STATE, name))
-    os.chmod(os.path.join(STATE, "awgbv_access_key"), 0o600)
+    key = os.path.join(STATE, "awgbv_access_key")
+    if os.path.exists(key):
+        os.chmod(key, 0o600)
 
 
 def revoke_via_helper(public_key, host):
@@ -216,10 +218,15 @@ def main():
             print("  ошибка драйвера:", payload["error"][:400])
             ok = False
 
+        for item in payload.get("findings", []):
+            print(f"  ·· {item.get('label')}: {item.get('text')}")
+
         link = payload.get("link") or ""
         if not link.startswith("vpn://"):
-            print("FAIL: ссылка не выпущена")
-            ok = False
+            # слепой прогон ничего не выпускает — для него это норма
+            if "link" in payload:
+                print("FAIL: ссылка не выпущена")
+                ok = False
         else:
             # ссылка обязана разбираться хелпером — иначе она бесполезна
             dump = subprocess.run([BIN, "--dump-profile", "/dev/stdin"], input=link,

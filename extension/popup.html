@@ -21,7 +21,7 @@
     <section class="screen active" id="screen-home">
       <div id="alertBox" class="alert hidden">
         <span id="alertText"></span>
-        <button class="btn small" id="alertInstall">Установить хелпер</button>
+        <button class="btn small" id="alertInstall">Установить помощник</button>
       </div>
 
       <div class="hero">
@@ -30,6 +30,7 @@
         </button>
         <div class="hero-label" id="heroLabel">Отключено</div>
         <div class="hero-sub" id="heroSub">нажмите, чтобы подключиться</div>
+        <button class="btn accent" id="btnFirstKey" hidden>Добавить ключ vpn://</button>
       </div>
 
       <div class="stats">
@@ -62,6 +63,19 @@
     <!-- ---------------------------------------------------------- Серверы -->
     <section class="screen" id="screen-servers">
       <h2>Подключения</h2>
+
+      <div class="card" id="firstSteps">
+        <h2 style="margin:0 0 6px">С чего начать</h2>
+        <ol class="steps">
+          <li>Возьмите ссылку вида <span class="mono">vpn://…</span> у того, кто дал вам сервер.
+              Она лежит в приложении Amnezia: «Поделиться» → «Скопировать ссылку».</li>
+          <li>Вставьте её в поле ниже и нажмите «Добавить профиль».</li>
+          <li>Вернитесь на «Главную» и нажмите большую кнопку — браузер пойдёт через VPN.</li>
+        </ol>
+        <p class="hint" style="margin:8px 0 0">Своего сервера и ключа ещё нет?
+          Подойдёт любой сервер Amnezia, свой или знакомого. Свой настраивается на вкладке «Панель».</p>
+      </div>
+
       <div id="serverList"></div>
 
       <div class="card" style="margin-top:10px">
@@ -109,11 +123,19 @@
 
     <!-- ----------------------------------------------------------- Панель -->
     <section class="screen" id="screen-admin">
-      <h2>Панель</h2>
+      <div class="row between" style="margin-bottom:8px">
+        <h2 style="margin:0">Панель</h2>
+        <span class="badge">необязательно</span>
+      </div>
       <p class="hint" id="adminIntro">
         Ключи и служба на вашем сервере Amnezia: список устройств, выпуск новых ключей
-        и спутник на UDP/443, если в сети разрешён только этот порт.
+        и обход блокировок на UDP/443, если в сети разрешён только этот порт.
+        <br>Этот раздел нужен, только если сервер ваш. Если ключ вам просто дали —
+        он не понадобится, всё делается на вкладке «Серверы».
       </p>
+      <button class="btn" id="btnNoServer" style="margin-top:8px">
+        У меня нет своего сервера — вернуться к ключу
+      </button>
 
       <div class="card" id="adminConnectCard" hidden>
         <h2>Свой сервер Amnezia</h2>
@@ -182,11 +204,11 @@
       </div>
 
       <details class="card fold" id="adminSatCard">
-        <summary>Спутник на 443</summary>
+        <summary>Обход блокировок (порт 443)</summary>
         <p class="hint">
           Если в сети разрешён только UDP 443 (так бывает за корпоративным VPN), поставьте на
-          сервер спутник: он слушает 443 и передаёт пакеты вашему AmneziaWG. Ключи и контейнер
-          не меняются, клиенту настраивать нечего.
+          на сервер обходчик блокировок: он слушает 443 и передаёт пакеты вашему AmneziaWG.
+          Ключи и настройки подключения не меняются, клиенту настраивать нечего.
         </p>
         <p class="hint">
           Это системная служба от root, поэтому нужен полный SSH-доступ. Пароль используется
@@ -234,11 +256,11 @@
           <label class="switch"><input type="checkbox" id="autoConnect"><span class="slider"></span></label>
         </div>
         <div class="row between" style="margin-bottom:10px">
-          <span>Подбирать MTU под сеть<span class="hint" style="display:block">нужно, если работает другой VPN (AnyConnect и подобные)</span></span>
+          <span>Подбирать размер пакета (MTU) под сеть<span class="hint" style="display:block">нужно, если работает другой VPN (AnyConnect и подобные)</span></span>
           <label class="switch"><input type="checkbox" id="mtuAuto"><span class="slider"></span></label>
         </div>
         <label class="field">
-          <span class="lbl">Порт SOCKS5 (0 — выбрать автоматически)</span>
+          <span class="lbl">Локальный порт туннеля (SOCKS5, 0 — выбрать автоматически)</span>
           <input type="number" id="listenPort" min="0" max="65535" step="1" value="0">
         </label>
         <div class="row" style="margin-top:10px">
@@ -248,7 +270,7 @@
       </div>
 
       <div class="card">
-        <h2>Хелпер</h2>
+        <h2>Помощник</h2>
         <p class="hint" id="helperMissingHint" style="margin:0 0 10px"></p>
         <div class="kv"><span class="k">Состояние</span><span id="hState">—</span></div>
         <div class="kv"><span class="k">Версия</span><span class="mono" id="hVersion">—</span></div>
@@ -256,7 +278,7 @@
         <div class="kv"><span class="k">MTU</span><span id="hMtu">—</span></div>
         <div class="kv"><span class="k">Последняя попытка</span><span id="hAttempt">—</span></div>
         <div class="row wrap" style="margin-top:10px; gap:8px">
-          <button class="btn accent" id="btnInstall">Установить хелпер</button>
+          <button class="btn accent" id="btnInstall">Установить помощник</button>
           <button class="btn" id="btnRestart">Перезапустить</button>
           <button class="btn danger" id="btnQuit">Остановить</button>
         </div>
@@ -266,11 +288,11 @@
       <div class="card">
         <h2>Обновления</h2>
         <div class="kv"><span class="k">Аддон</span><span id="updAddon">—</span></div>
-        <div class="kv"><span class="k">Хелпер</span><span id="updHelper">—</span></div>
+        <div class="kv"><span class="k">Помощник</span><span id="updHelper">—</span></div>
         <p class="hint" id="updHint" style="margin:8px 0 0"></p>
         <div class="row wrap" style="margin-top:10px; gap:8px">
           <button class="btn" id="btnCheckUpdates">Проверить</button>
-          <button class="btn accent" id="btnUpdateHelper" hidden>Обновить хелпер</button>
+          <button class="btn accent" id="btnUpdateHelper" hidden>Обновить помощника</button>
           <button class="btn accent" id="btnDownloadAddon" hidden>Скачать обновление</button>
         </div>
       </div>
@@ -287,7 +309,7 @@
   <div class="sheet hidden" id="installSheet">
     <div class="sheet-card">
       <div class="row between">
-        <h2 style="margin:0">Установка хелпера</h2>
+        <h2 style="margin:0">Установка помощника</h2>
         <button class="icon-btn" id="installClose" title="Закрыть">×</button>
       </div>
       <div class="sheet-body">
@@ -298,8 +320,13 @@
       <div class="sheet-actions">
         <div class="row wrap" style="gap:8px">
           <button class="btn accent" id="installDownload">Скачать установщик</button>
-          <button class="btn" id="installCopy">Скопировать команду</button>
         </div>
+        <details style="margin-top:9px">
+          <summary class="hint" style="cursor:pointer">Не получается запустить файл? Есть команда для командной строки</summary>
+          <div class="row" style="margin-top:7px">
+            <button class="btn" id="installCopy">Скопировать команду</button>
+          </div>
+        </details>
         <div class="row" style="margin-top:9px">
           <button class="btn primary" id="installRecheck">Проверить снова</button>
           <span class="hint" id="installStatus"></span>

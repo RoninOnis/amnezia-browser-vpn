@@ -221,6 +221,12 @@ async function renderWith(ui, state) {
   return ui;
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// переменные попапа объявлены через let/const — они не свойства контекста,
+// поэтому читаем их выражением внутри vm
+const ctxVar = (ui, name) => vm.runInContext(name, ui.ctx);
+
 async function click(ui, node) {
   for (const fn of node.handlers.click || []) await fn.call(node, {});
 }
@@ -339,4 +345,64 @@ test("порт, набранный в строке адреса, переезж�
   assert.equal(msg.host, "vpn.example.com");
   assert.equal(msg.port, 2222, "порт из строки не должен теряться");
   assert.equal(ui.el("#admPort").value, "2222", "человек должен увидеть, что порт распознан");
+});
+
+/* ---------------------------------------- первый запуск: понятно ли, что делать */
+
+test("первый запуск: главная не обещает подключение, а показывает, что нажать", async () => {
+  const ui = await boot();
+  await renderWith(ui, makeState({ profiles: [], activeProfile: null, enabled: false }));
+
+  assert.equal(ui.el("#btnFirstKey").hidden, false, "нужна явная кнопка «Добавить ключ vpn://»");
+  assert.doesNotMatch(ui.el("#heroSub").textContent, /нажмите, чтобы подключиться/,
+    "без профиля нельзя предлагать «нажмите, чтобы подключиться»");
+  assert.match(ui.el("#heroSub").textContent, /профиля нет/i);
+  assert.equal(ui.el("#btnReconnect").classList.contains("hidden"), true,
+    "«переподключиться» без сервера — ложная надежда");
+  assert.equal(ui.el("#firstSteps").classList.contains("hidden"), false,
+    "блок «С чего начать» должен быть виден");
+});
+
+test("первый запуск: «Добавить ключ vpn://» ведёт на «Серверы»", async () => {
+  const ui = await boot();
+  await renderWith(ui, makeState({ profiles: [], enabled: false }));
+  ui.ctx.showScreen("home");
+  await click(ui, ui.el("#btnFirstKey"));
+  assert.equal(ctxVar(ui, "currentScreen"), "servers");
+});
+
+test("когда профиль есть, подсказки первого запуска убираются", async () => {
+  const ui = await boot();
+  await renderWith(ui, makeState({
+    profiles: [{ id: "p1", name: "Дом", endpoint: "1.2.3.4:1234" }],
+    activeProfile: { id: "p1", name: "Дом", endpoint: "1.2.3.4:1234" },
+    activeProfileId: "p1",
+  }));
+  assert.equal(ui.el("#btnFirstKey").hidden, true);
+  assert.equal(ui.el("#firstSteps").classList.contains("hidden"), true);
+});
+
+test("подсказка про списки не противоречит бейджy режима", async () => {
+  const ui = await boot();
+  await renderWith(ui, makeState({ whitelist: [], blacklist: [] }));
+  ui.ctx.showScreen("sites");
+  assert.match(ui.el("#modeBadge").textContent, /весь трафик через VPN/);
+  assert.match(ui.el("#sitesHint").textContent, /весь трафик/,
+    "при пустом списке «Через VPN» идёт весь трафик — так и надо написать");
+
+  await renderWith(ui, makeState({ whitelist: ["youtube.com"], blacklist: [] }));
+  ui.ctx.showScreen("sites");
+  assert.match(ui.el("#modeBadge").textContent, /только сайты из списка/);
+  assert.match(ui.el("#sitesHint").textContent, /только сайты из этого списка/i);
+});
+
+test("на «Панели» видно, что раздел необязательный, и есть выход к ключу", async () => {
+  const ui = await boot();
+  await renderWith(ui, makeState({ servers: [], profiles: [] }));
+  ui.ctx.showScreen("admin");
+  const noServer = ui.el("#btnNoServer");
+  assert.ok(noServer.handlers.click && noServer.handlers.click.length,
+    "кнопка «у меня нет своего сервера» должна работать");
+  await click(ui, noServer);
+  assert.equal(ctxVar(ui, "currentScreen"), "servers");
 });

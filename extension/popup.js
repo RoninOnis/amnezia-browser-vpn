@@ -107,9 +107,16 @@ function renderHome() {
     label.textContent = "Не подключено";
   }
 
+  const hasProfile = !!(s.profiles && s.profiles.length);
+  // круг без подписи не читается как кнопка: на первом запуске даём обычную кнопку
+  const firstKey = $("#btnFirstKey");
+  if (firstKey) firstKey.hidden = hasProfile;
   const sub = $("#heroSub");
-  if (s.enabled && t.socksPort) sub.textContent = `SOCKS5 127.0.0.1:${t.socksPort}`;
-  else if (s.enabled) sub.textContent = "хелпер не отвечает";
+  if (!hasProfile) {
+    // «нажмите, чтобы подключиться» без профиля — обещание, которого не будет
+    sub.textContent = "профиля нет — добавьте ключ на вкладке «Серверы»";
+  } else if (s.enabled && t.socksPort) sub.textContent = `SOCKS5 127.0.0.1:${t.socksPort}`;
+  else if (s.enabled) sub.textContent = "помощник не отвечает";
   else sub.textContent = "нажмите, чтобы подключиться";
 
   $("#statRx").textContent = t.running ? fmtBytes(t.rxBytes) : "—";
@@ -129,13 +136,15 @@ function renderHome() {
     meta.textContent = "добавьте ключ vpn:// на вкладке «Серверы»";
   }
   $("#btnReconnect").disabled = !s.activeProfile;
+  // «переподключиться» без сервера только путает: нечего переподключать
+  $("#btnReconnect").classList.toggle("hidden", !s.activeProfile);
 
   // алерт: отдельно «хелпер не установлен» (это не ошибка, а первый запуск)
   const alertBox = $("#alertBox");
   const alertText = $("#alertText");
   const installBtn = $("#alertInstall");
   if (s.helperMissing) {
-    alertText.textContent = "Хелпер awgbv не установлен — без него туннель не поднять.";
+    alertText.textContent = "Помощник не установлен — без него туннель не поднять.";
     installBtn.classList.remove("hidden");
     alertBox.classList.remove("hidden");
   } else if (s.lastError) {
@@ -143,7 +152,7 @@ function renderHome() {
     installBtn.classList.add("hidden");
     alertBox.classList.remove("hidden");
   } else if (!s.profiles.length) {
-    alertText.textContent = "Профиля нет: на вкладке «Серверы» вставьте ссылку vpn:// из приложения Amnezia.";
+    alertText.textContent = "Профиля нет: на вкладке «Серверы» вставьте ссылку vpn:// и нажмите «Добавить профиль».";
     installBtn.classList.add("hidden");
     alertBox.classList.remove("hidden");
   } else {
@@ -166,6 +175,8 @@ function renderHome() {
 }
 
 function renderServers() {
+  const first = $("#firstSteps");
+  if (first) first.classList.toggle("hidden", !!(state.profiles || []).length);
   const s = state;
   const box = $("#serverList");
   box.innerHTML = "";
@@ -229,16 +240,28 @@ function renderSites() {
 
   const mode = effectiveMode(s);
   const badge = $("#modeBadge");
-  badge.textContent = mode === "whitelist" ? "режим: только список" : "режим: всё кроме списка";
+  badge.textContent = mode === "whitelist"
+    ? "сейчас: только сайты из списка"
+    : "сейчас: весь трафик через VPN";
   badge.className = "badge " + (mode === "whitelist" ? "accent" : "");
 
   if (sitesMsg && Date.now() - sitesMsgAt < 6000) {
     $("#sitesHint").textContent = sitesMsg;
     $("#sitesHint").className = "hint" + (sitesMsgKind ? " " + sitesMsgKind : "");
   } else {
-    $("#sitesHint").textContent = activeList === "whitelist"
-      ? "Только сайты из этого списка пойдут через VPN. Пока список пуст — через VPN идёт всё, кроме «Напрямую»."
-      : "Эти адреса всегда идут напрямую, мимо туннеля. Приоритет выше, чем у списка «Через VPN».";
+    // подсказка обязана совпадать с бейджем режима: раньше «режим: всё кроме списка»
+    // стоял рядом с «только сайты из этого списка пойдут через VPN» — два
+    // взаимоисключающих утверждения на одном экране
+    const wlEmpty = !(s.whitelist || []).length;
+    if (activeList === "whitelist") {
+      $("#sitesHint").textContent = wlEmpty
+        ? "Список пуст, поэтому через VPN идёт весь трафик. Добавьте сайты сюда — и через VPN пойдут только они."
+        : "Через VPN идут только сайты из этого списка.";
+    } else {
+      $("#sitesHint").textContent = (s.blacklist || []).length
+        ? "Эти сайты всегда идут напрямую, мимо туннеля — даже если попали в список «Через VPN»."
+        : "Здесь сайты, которые всегда идут напрямую, мимо туннеля. Пока пусто — таких сайтов нет.";
+    }
     $("#sitesHint").className = "hint";
   }
 
@@ -300,8 +323,12 @@ function renderSettings() {
   setSwitch($("#autoConnect"), !!s.autoConnect);
   setSwitch($("#mtuAuto"), s.mtuAuto !== false);
   $("#listenPort").value = s.listenPort || 0;
+  const installBtn = $("#btnInstall");
+  if (installBtn) {
+    installBtn.textContent = s.helperMissing ? "Установить помощника" : "Переустановить помощника";
+  }
   $("#helperMissingHint").textContent = s.helperMissing
-    ? "Хелпер не найден. Кнопка «Установить хелпер» проведёт по шагам: скачать, открыть, запустить."
+    ? "Помощник не найден. Кнопка «Установить помощник» проведёт по шагам: скачать, открыть, запустить."
     : "";
   $("#hState").textContent = s.helperMissing
     ? "не установлен"
@@ -369,14 +396,14 @@ function renderUpdates() {
     const helperPart = u && u.helper;
     upd.hidden = !(helperPart && (helperPart.outdated || helperPart.missing));
     upd.disabled = !!(state && state.updatingHelper);
-    upd.textContent = state && state.updatingHelper ? "Обновляю…" : "Обновить хелпер";
+    upd.textContent = state && state.updatingHelper ? "Обновляю…" : "Обновить помощника";
   }
   if (!u) {
     addonEl.textContent = "не проверялось";
     addonEl.className = "";
     helperEl.textContent = state && state.helperVersion ? `${state.helperVersion} · не проверялось` : "—";
     helperEl.className = "";
-    hint.textContent = "Проверка идёт через хелпер: отдельного доступа к сети расширению не нужно.";
+    hint.textContent = "Проверка идёт через помощника: отдельного доступа к сети расширению не нужно.";
     dl.hidden = true;
     return;
   }
@@ -385,15 +412,15 @@ function renderUpdates() {
 
   const lines = [];
   if (u.error) lines.push(`Проверить не удалось: ${u.error}.`);
-  if (u.helper && u.helper.missing && !u.error) lines.push("Хелпер не установлен — сравнивать нечего.");
+  if (u.helper && u.helper.missing && !u.error) lines.push("Помощник не установлен — сравнивать нечего.");
   if (u.addon && u.addon.outdated) lines.push("Аддон старее релиза: обновите .xpi из релиза.");
-  if (u.helper && u.helper.outdated) lines.push("Хелпер старее релиза — нажмите «Обновить хелпер»: туннель перезапустится сам.");
+  if (u.helper && u.helper.outdated) lines.push("Помощник старее релиза — нажмите «Обновить помощника»: туннель перезапустится сам.");
   const last = state && state.lastHelperUpdate;
   if (last) {
     lines.length = 0;
     lines.push(last.ok
-      ? `Хелпер обновлён${last.from ? ` с ${last.from}` : ""} до ${last.to}, туннель перезапущен.`
-      : `Обновить хелпер не удалось: ${last.error || "неизвестная ошибка"}.`);
+      ? `Помощник обновлён${last.from ? ` с ${last.from}` : ""} до ${last.to}, туннель перезапущен.`
+      : `Обновить помощника не удалось: ${last.error || "неизвестная ошибка"}.`);
   }
   if (!lines.length) lines.push("Всё актуально.");
   hint.textContent = lines.join(" ");
@@ -507,7 +534,7 @@ function renderAdmin() {
   if (s.satelliteBusy) {
     setHint("#satHint", "Работаю… установка может занять минуту");
   } else if (sat && sat.dryRun && sat.finished) {
-    // порядок важен: хелпер ставит finished=true и для плана, поэтому dryRun
+    // порядок важен: помощник ставит finished=true и для плана, поэтому dryRun
     // проверяется первым — иначе «Проверить» рапортовало об установке службы
     setHint("#satHint", "Проверка прошла: препятствий не найдено — можно устанавливать");
   } else if (sat && sat.dryRun) {
@@ -599,7 +626,26 @@ for (const btn of $$("#tabbar button")) {
 
 /* --------------------------------------------------------------- Главная */
 
+$("#btnFirstKey").addEventListener("click", () => {
+  showScreen("servers");
+  const box = $("#newLink");
+  if (box) {
+    box.focus();
+    box.scrollIntoView({ block: "center" });
+  }
+});
+
 $("#heroBtn").addEventListener("click", async () => {
+  if (!(state.profiles || []).length) {
+    showScreen("servers");
+    const box = $("#newLink");
+    if (box) {
+      box.focus();
+      box.scrollIntoView({ block: "center" });
+    }
+    setHint("#addHint", "вставьте сюда ключ vpn:// — он начинается с vpn://", "warn");
+    return;
+  }
   const res = await send("setEnabled", { value: !state.enabled });
   if (res && res.ok === false && res.error) {
     $("#alertBox").textContent = res.error;
@@ -786,14 +832,14 @@ $("#btnRestart").addEventListener("click", async () => {
 });
 
 $("#btnQuit").addEventListener("click", async () => {
-  if (!confirm("Остановить хелпер? Туннель закроется, расширение останется.")) return;
+  if (!confirm("Остановить помощника? Туннель закроется, расширение останется.")) return;
   await send("quitHelper");
   await refresh();
 });
 
 /* -------------------------------------------------------------- запуск */
 
-/* --------------------------------------------- мастер установки хелпера */
+/* --------------------------------------------- мастер установки помощника */
 
 let guide = null;
 
@@ -879,7 +925,7 @@ $("#installRecheck").addEventListener("click", async () => {
     render();
   }
   if (state && !state.helperMissing) {
-    box.textContent = "хелпер найден";
+    box.textContent = "помощник найден";
     setTimeout(closeInstallSheet, 700);
     if (state.enabled && !state.tunnel.running) await send("connect");
     await refresh();
@@ -912,7 +958,7 @@ $("#btnCheckUpdates").addEventListener("click", async () => {
 
 // Адрес сервера в форме подключения: снимаем схему, слэш и пробелы, а порт,
 // случайно набранный в той же строке («vpn.ru:2222»), переносим в поле порта.
-// Хелпер тоже это умеет, но попап не должен отправлять заведомый мусор.
+// Помощник тоже это умеет, но попап не должен отправлять заведомый мусор.
 function panelHost(raw) {
   let text = String(raw || "").trim();
   if (!text) return { host: "", port: "" };
@@ -927,6 +973,14 @@ function panelHost(raw) {
   }
   return { host: text.replace(/^\[|\]$/g, ""), port };
 }
+
+// явный выход для тех, кому эта вкладка не нужна: без него человек остаётся
+// на экране с полями пароля и решает, что без сервера ничего не выйдет
+$("#btnNoServer").addEventListener("click", () => {
+  showScreen("servers");
+  const box = $("#newLink");
+  if (box) box.focus();
+});
 
 $("#btnAdminConnect").addEventListener("click", async () => {
   if (panelBusy("#admConnectHint")) return;
@@ -1099,7 +1153,7 @@ $("#btnUpdateHelper").addEventListener("click", async () => {
   const btn = $("#btnUpdateHelper");
   btn.disabled = true;
   btn.textContent = "Обновляю…";
-  $("#updHint").textContent = "Скачиваю и проверяю новый хелпер…";
+  $("#updHint").textContent = "Скачиваю и проверяю нового помощника…";
   try {
     const res = await send("updateHelper");
     if (res && res.state) {
@@ -1111,7 +1165,7 @@ $("#btnUpdateHelper").addEventListener("click", async () => {
     }
   } finally {
     btn.disabled = false;
-    btn.textContent = "Обновить хелпер";
+    btn.textContent = "Обновить помощника";
   }
 });
 
@@ -1133,7 +1187,11 @@ async function init() {
   if (tab) {
     currentTabId = tab.id;
     try {
-      currentHost = new URL(tab.url).hostname;
+      const u = new URL(tab.url);
+      // только настоящие сайты: у служебных страниц браузера и у страниц самого
+      // расширения hostname — UUID вида e5fc0d4d-…, и человек видел его в карточке
+      currentHost = /^https?:$/.test(u.protocol) && /\.[a-z0-9-]+$/i.test(u.hostname)
+        ? u.hostname : "";
     } catch (err) {
       currentHost = "";
     }
