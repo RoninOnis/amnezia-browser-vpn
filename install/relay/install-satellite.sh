@@ -5,27 +5,32 @@
 # AmneziaWG слушает случайный порт вроде 36853. Спутник ставится на ТОМ ЖЕ сервере,
 # где уже стоит Amnezia: он ничего не меняет в контейнере, не трогает ключи и не
 # требует новых ссылок vpn://. Клиенту тоже ничего настраивать не нужно — наш
-# хелпер сам пробует 443, если штатный порт не отвечает.
+# хелпер сам пробует 443, если штатный порт не ответил.
 #
 # Запуск (root, на сервере с AmneziaWG):
-#   bash install-satellite.sh
+#   bash install-satellite.sh --dry-run     # только посмотреть, ничего не менять
+#   bash install-satellite.sh               # установить
 #
-# Скрипт сам находит контейнер AmneziaWG, его адрес и порт внутри docker.
-# Если автоопределение не сработало — задайте цель вручную:
-#   bash install-satellite.sh --target 172.29.172.2:37689
+# Что делает установка: кладёт бинарь в /usr/local/bin, конфиг в /etc и создаёт
+# systemd-службу awgbv-satellite. Docker только читается (ps/inspect/exec), ни один
+# контейнер не пересоздаётся и не перезапускается. Удаление — в конце вывода.
 set -euo pipefail
 
 TARGET=""
+CONTAINER=""
 LISTEN_PORT="${LISTEN_PORT:-443}"
 VERSION="${VERSION:-latest}"
-BASE="https://github.com/RoninOnis/amnezia-browser-vpn/releases/${VERSION}/download"
+DRY_RUN=0
+BASE="https://github.com/RoninOnis/amnezia-browser-vpn/releases"
 TOKEN="${TOKEN:-}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --target) TARGET="$2"; shift 2 ;;
-    --port)   LISTEN_PORT="$2"; shift 2 ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    --target)    TARGET="$2"; shift 2 ;;
+    --container) CONTAINER="$2"; shift 2 ;;
+    --port)      LISTEN_PORT="$2"; shift 2 ;;
+    --dry-run)   DRY_RUN=1; shift ;;
+    -h|--help)   sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "неизвестный аргумент: $1" >&2; exit 1 ;;
   esac
 done
@@ -34,52 +39,124 @@ if [ "$(id -u)" != "0" ] && [ "${FORCE_ROOT:-0}" != "1" ]; then
   echo "нужен root (запустите через sudo)" >&2
   exit 1
 fi
-
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker не найден: этот скрипт ставится на сервер, где уже работает AmneziaWG" >&2
   exit 1
 fi
 
+# Порт, который реально слушает AWG внутри контейнера. Спрашиваем у конфига и у самого
+# интерфейса: docker port для этого не годится — у Amnezia внутри может быть 443, а
+# наружу опубликован совсем другой порт, и тогда цель была бы неверной. Именно так
+# скрипт однажды принял чужой контейнер (amnezia-*) за AWG и взял порт 443.
+awg_port_of() {
+  local c="$1" p=""
+  p="$(docker exec "$c" sh -c 'grep -rhoiE "^[[:space:]]*ListenPort[[:space:]]*=[[:space:]]*[0-9]+" /opt/amnezia/awg/ 2>/dev/null | grep -oE "[0-9]+$" | head -1' 2>/dev/null || true)"
+  if [ -z "$p" ]; then
+    p="$(docker exec "$c" sh -c 'awg show all 2>/dev/null | grep -i "listening port" | grep -oE "[0-9]+$" | head -1' 2>/dev/null || true)"
+  fi
+  if [ -z "$p" ]; then
+    p="$(docker exec "$c" sh -c 'wg show all 2>/dev/null | grep -i "listening port" | grep -oE "[0-9]+$" | head -1' 2>/dev/null || true)"
+  fi
+  printf '%s' "$p"
+}
+
+# Адрес контейнера. Предпочитаем сеть со словом amnezia в названии, иначе первый непустой.
+container_ip_of() {
+  docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}={{$v.IPAddress}}{{"\n"}}{{end}}' "$1" 2>/dev/null \
+    | awk -F= '$2!="" {print}' \
+    | { grep -i amnezia || cat; } \
+    | head -1 | cut -d= -f2
+}
+
+echo "→ ищу контейнеры AmneziaWG"
+FOUND_ANY=0
+DETECTED_PORT=""
+DETECTED_IP=""
+while read -r c; do
+  [ -z "$c" ] && continue
+  port="$(awg_port_of "$c")"
+  if [ -n "$port" ]; then
+    ip="$(container_ip_of "$c")"
+    FOUND_ANY=1
+    echo "   $c — AmneziaWG, слушает $port, адрес ${ip:-?}"
+    if [ -z "$CONTAINER" ]; then
+      CONTAINER="$c"; DETECTED_PORT="$port"; DETECTED_IP="$ip"
+    fi
+  else
+    echo "   $c — не AmneziaWG (пропускаю)"
+  fi
+done <<EOF
+$(docker ps --format '{{.Names}}')
+EOF
+
+if [ "$FOUND_ANY" = "0" ]; then
+  echo "контейнер AmneziaWG не найден." >&2
+  echo "Если Amnezia стоит не в docker, задайте цель вручную: --target <ip:порт>" >&2
+  exit 1
+fi
+
 if [ -z "$TARGET" ]; then
-  echo "→ ищу контейнер AmneziaWG"
-  CONTAINER="$(docker ps --format '{{.Names}}' | grep -iE 'awg|amnezia' | head -1 || true)"
-  if [ -z "$CONTAINER" ]; then
-    echo "контейнер AmneziaWG не найден. Запустите с --target <ip:порт>" >&2
-    echo "подсказка: docker ps --format '{{.Names}}\t{{.Ports}}'" >&2
+  if [ -n "$DETECTED_IP" ] && [ -n "$DETECTED_PORT" ]; then
+    TARGET="$DETECTED_IP:$DETECTED_PORT"
+    echo "   цель: $TARGET (контейнер $CONTAINER)"
+  else
+    echo "не смог определить адрес/порт контейнера. Задайте вручную: --target <ip:порт>" >&2
+    echo "подсказка: docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' $CONTAINER" >&2
     exit 1
   fi
-  IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$CONTAINER" | awk '{print $1}')"
-  PORT="$(docker port "$CONTAINER" | head -1 | sed 's|.*/udp||; s|.*-> ||' | cut -d: -f2)"
-  if [ -z "$IP" ] || [ -z "$PORT" ]; then
-    echo "не смог определить адрес/порт контейнера $CONTAINER. Запустите с --target <ip:порт>" >&2
-    docker ps --format '{{.Names}}\t{{.Ports}}' >&2
-    exit 1
-  fi
-  TARGET="$IP:$PORT"
-  echo "   контейнер $CONTAINER → цель $TARGET"
+fi
+
+case "$TARGET" in
+  127.0.0.1:*)
+    echo "цель 127.0.0.1 не работает: docker не транслирует loopback, пакеты уйдут в никуда." >&2
+    echo "укажите адрес контейнера внутри docker-сети" >&2
+    exit 1 ;;
+esac
+
+if ss -lunp 2>/dev/null | grep -q ":${LISTEN_PORT} "; then
+  BUSY="$(ss -lunp | grep ":${LISTEN_PORT} " | head -1)"
+  echo "порт ${LISTEN_PORT}/udp уже занят:" >&2
+  echo "   $BUSY" >&2
+  echo "спутнику нужен свободный ${LISTEN_PORT}/udp. Разберитесь, что там висит." >&2
+  exit 1
+fi
+
+echo
+echo "План:"
+echo "  бинарь:  /usr/local/bin/awgbv-satellite"
+echo "  конфиг:  /etc/awgbv-satellite.env (600)"
+echo "  служба:  awgbv-satellite, слушает 0.0.0.0:${LISTEN_PORT}/udp"
+echo "  цель:    ${TARGET}"
+echo "  docker:  только чтение, контейнеры не трогаются"
+
+if [ "$DRY_RUN" = "1" ]; then
+  echo
+  echo "--dry-run: ничего не менял. Запустите без флага, чтобы установить."
+  exit 0
 fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+echo
 echo "→ скачиваю бинарь"
-curl -fsSL -o "$TMP/awgbv" "$BASE/awgbv-linux-amd64"
-curl -fsSL -o "$TMP/SHA256SUMS" "$BASE/SHA256SUMS"
+curl -fsSL -o "$TMP/awgbv-linux-amd64" "$BASE/$VERSION/download/awgbv-linux-amd64"
+curl -fsSL -o "$TMP/SHA256SUMS" "$BASE/$VERSION/download/SHA256SUMS"
 ( cd "$TMP" && grep 'awgbv-linux-amd64' SHA256SUMS > sums.txt && sha256sum -c sums.txt >/dev/null ) \
-  || { echo "sha256 не сошёлся — установка прервана" >&2; exit 1; }
+  || { echo "sha256 не сошёлся — установка прервана, ничего не изменено" >&2; exit 1; }
 echo "→ sha256 совпал"
 
-install -m 0755 "$TMP/awgbv" /usr/local/bin/awgbv-satellite
+install -m 0755 "$TMP/awgbv-linux-amd64" /usr/local/bin/awgbv-satellite
 
 umask 077
-cat > /etc/awgbv-satellite.env <<EOF
+cat > /etc/awgbv-satellite.env <<EOF2
 TARGET=$TARGET
 LISTEN=0.0.0.0:$LISTEN_PORT
 TOKEN=$TOKEN
-EOF
+EOF2
 chmod 600 /etc/awgbv-satellite.env
 
-cat > /etc/systemd/system/awgbv-satellite.service <<'EOF'
+cat > /etc/systemd/system/awgbv-satellite.service <<'EOF2'
 [Unit]
 Description=awgbv satellite (AmneziaWG reachable on udp/443)
 After=network-online.target docker.service
@@ -96,7 +173,7 @@ PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target
-EOF
+EOF2
 
 systemctl daemon-reload
 systemctl enable --now awgbv-satellite >/dev/null 2>&1
@@ -107,14 +184,17 @@ if systemctl is-active --quiet awgbv-satellite; then
   journalctl -u awgbv-satellite -n 3 --no-pager | tail -3
   echo
   echo "Проверка:"
-  echo "  1) порт слушается:  ss -lunp | grep ':${LISTEN_PORT} '"
-  echo "  2) снаружи в расширении просто нажать «Подключить»: хелпер сам попробует 443"
-  echo "  3) в логе клиента должно появиться:"
-  echo "     handshake ok after ... (mtu 1280, endpoint <ip-сервера>:${LISTEN_PORT})"
+  echo "  ss -lunp | grep ':${LISTEN_PORT} '          # порт слушается"
+  echo "  journalctl -u awgbv-satellite -n 20        # что происходит"
   echo
-  echo "Удалить: systemctl disable --now awgbv-satellite && rm -f /etc/awgbv-satellite.env \\"
-  echo "         /etc/systemd/system/awgbv-satellite.service /usr/local/bin/awgbv-satellite"
+  echo "Клиенту в расширении достаточно нажать «Подключить»: хелпер сам попробует 443."
+  echo "В его логе появится: handshake ok ... (mtu 1280, endpoint <ip-сервера>:${LISTEN_PORT})"
+  echo
+  echo "Удалить:"
+  echo "  systemctl disable --now awgbv-satellite && rm -f /etc/awgbv-satellite.env \\"
+  echo "    /etc/systemd/system/awgbv-satellite.service /usr/local/bin/awgbv-satellite"
 else
-  echo "спутник не поднялся, смотрите: journalctl -u awgbv-satellite -n 20" >&2
+  echo "спутник не поднялся: journalctl -u awgbv-satellite -n 20" >&2
+  echo "контейнер AmneziaWG не тронут, его штатный порт работает как раньше" >&2
   exit 1
 fi
