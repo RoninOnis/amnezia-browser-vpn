@@ -69,7 +69,7 @@ class WebDriver:
         return self._open(urllib.request.Request(self.base + path))
 
 
-def build_test_extension(link, profile, mode, whitelist, blacklist):
+def build_test_extension(link, profile, whitelist, blacklist):
     shutil.rmtree(TESTEXT, ignore_errors=True)
     shutil.copytree(os.path.join(ROOT, "extension"), TESTEXT,
                     ignore=shutil.ignore_patterns("tests"))
@@ -78,7 +78,6 @@ def build_test_extension(link, profile, mode, whitelist, blacklist):
     defaults = {
         "enabled": True,
         "autoConnect": True,
-        "mode": mode,
         "whitelist": whitelist,
         "blacklist": blacklist,
         "profiles": [{
@@ -171,7 +170,7 @@ def egress_ip(wd, session, url):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("profile", help="vpn:// link file, .conf or JSON profile")
-    ap.add_argument("--mode", default="whitelist", choices=["whitelist", "blacklist"])
+    # режим больше не задаётся: он выводится из списков (непустой whitelist → «только список»)
     ap.add_argument("--whitelist", default="")
     ap.add_argument("--blacklist", default="")
     ap.add_argument("--expect-tunnel-url", action="append", default=[], metavar="URL",
@@ -187,10 +186,10 @@ def main():
     prof = json.loads(subprocess.run([BIN, "--dump-profile", args.profile],
                                      capture_output=True, text=True, check=True).stdout)
     server = prof["host"]
-    print(f"profile {prof['name']} → {server}:{prof['port']} | mode={args.mode} "
+    print(f"profile {prof['name']} → {server}:{prof['port']} | "
           f"whitelist={whitelist} blacklist={blacklist}")
 
-    xpi = build_test_extension(link, prof, args.mode, whitelist, blacklist)
+    xpi = build_test_extension(link, prof, whitelist, blacklist)
     prepare_profile(xpi)
     install_native_manifest()
     shutil.rmtree(STATE, ignore_errors=True)
