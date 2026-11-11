@@ -1,12 +1,8 @@
-# AWG Browser Tunnel
+# Amnezia Browser VPN (Firefox)
 
 Browser-only [Amnezia](https://github.com/amnezia-vpn/amnezia-client) tunnel: route **only Firefox**
 through your own AmneziaWG server, with per-site black/white lists — the rest of the machine stays on
 the normal connection.
-
-Расширение публикуется в каталоге AMO под именем **AWG Browser Tunnel** (ID `awgbv@0xoni.ru`
-неизменен), репозиторий исторически называется `amnezia-browser-vpn`. Имена и иконки в каталоге —
-свои: чужие товарный знак и логотип в публичной карточке не используются.
 
 > English summary: a Firefox extension + a small Go helper. The helper runs AmneziaWG in user space
 > (no TUN device, no root) and exposes a loopback SOCKS5 proxy; the extension decides per request
@@ -232,17 +228,6 @@ node --test extension/tests/split.test.mjs          # логика списко�
   пойдут.
 * **Ключи хранятся в `storage.local` расширения** в открытом виде — как и в десктопном клиенте
   Amnezia. Кому это важно, ставить расширение в отдельный профиль Firefox.
-
-## Каталог AMO
-
-Готовые поля для подачи (название, summary, описание, категории, заметки для ревьюера) —
-[`docs/AMO-LISTING.md`](docs/AMO-LISTING.md). Политика конфиденциальности —
-[`PRIVACY.md`](PRIVACY.md). Скриншоты карточки собираются `python3 tools/store_shots.py`
-(1280×800, нужны свежие кадры из `/root/awg-browser-vpn/shots.py`).
-
-Отдельно про канал: один и тот же ID не может быть одновременно `listed` и `unlisted`.
-Переход в каталог делается новой версией (`1.0.0`) в том же дополнении; после этого обновления
-идут через AMO и каждая версия проходит ревью.
 
 ## Лицензия
 
