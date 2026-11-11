@@ -107,8 +107,53 @@
       </div>
     </section>
 
-    <!-- -------------------------------------------------------- Настройки -->
-    <section class="screen" id="screen-settings">
+    <!-- ----------------------------------------------------------- Панель -->
+    <section class="screen" id="screen-admin">
+    <div class="card" id="adminConnectCard">
+      <h2>Свой сервер Amnezia</h2>
+      <p class="hint" style="margin:0 0 10px">
+        Нужен SSH-доступ к серверу. Пароль используется один раз для первичной настройки
+        и не сохраняется: дальше работа идёт отдельным ключом, которым можно выполнить
+        только управление ключами.
+      </p>
+      <div class="kv"><span class="k">Адрес</span><input class="input" id="admHost" placeholder="vpn.example.com"></div>
+      <div class="kv"><span class="k">SSH-порт</span><input class="input" id="admPort" value="22"></div>
+      <div class="kv"><span class="k">Пользователь</span><input class="input" id="admUser" value="root"></div>
+      <div class="kv"><span class="k">Пароль</span><input class="input" id="admPassword" type="password" placeholder="не сохраняется"></div>
+      <div class="row wrap" style="margin-top:10px; gap:8px">
+        <button class="btn accent" id="btnAdminConnect">Подключить и настроить</button>
+      </div>
+      <p class="hint" id="admConnectHint" style="margin:8px 0 0"></p>
+    </div>
+
+    <div class="card" id="adminPeersCard" hidden>
+      <h2>Ключи на сервере</h2>
+      <div class="kv"><span class="k">Сервер</span><span class="mono" id="admServer">—</span></div>
+      <div class="kv"><span class="k">Контейнер</span><span class="mono" id="admContainer">—</span></div>
+      <div class="row wrap" style="margin-top:10px; gap:8px">
+        <button class="btn" id="btnAdminRefresh">Обновить список</button>
+        <button class="btn accent" id="btnAdminCreate">Новый ключ</button>
+      </div>
+      <p class="hint" id="admPeerHint" style="margin:8px 0 0"></p>
+      <div id="admPeers"></div>
+    </div>
+
+    <div class="card" id="adminKeyCard" hidden>
+      <h2>Новый ключ готов</h2>
+      <div class="kv"><span class="k">Имя</span><span id="admKeyName">—</span></div>
+      <div class="kv"><span class="k">Внутренний IP</span><span class="mono" id="admKeyIp">—</span></div>
+      <p class="hint">Ссылка ниже — единственный экземпляр ключа. Передайте её на устройство и добавьте: она больше нигде не хранится.</p>
+      <textarea class="input mono" id="admKeyLink" rows="3" readonly></textarea>
+      <div class="row wrap" style="margin-top:10px; gap:8px">
+        <button class="btn accent" id="btnAdminAdopt">Добавить в мои серверы</button>
+        <button class="btn" id="btnAdminCopy">Скопировать ссылку</button>
+      </div>
+      <p class="hint" id="admKeyHint" style="margin:8px 0 0"></p>
+    </div>
+  </section>
+
+  <!-- -------------------------------------------------------- Настройки -->
+  <section class="screen" id="screen-settings">
       <div class="card">
         <h2>Поведение</h2>
         <div class="row between" style="margin-bottom:10px">
@@ -202,6 +247,10 @@
     <button data-screen="sites">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.5 2.5 15 0 18-2.5-3-2.5-15.5 0-18Z"/></svg>
       Сайты
+    </button>
+    <button data-screen="admin">
+      <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 20h10"/><path d="M12 16v4"/><path d="M7.5 8.5l2 2-2 2"/><path d="M12.5 12.5h4"/></svg>
+      Панель
     </button>
     <button data-screen="settings">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.0"/><path d="M12.00 6.00L12.00 3.70"/><path d="M17.20 9.00L19.19 7.85"/><path d="M17.20 15.00L19.19 16.15"/><path d="M12.00 18.00L12.00 20.30"/><path d="M6.80 15.00L4.81 16.15"/><path d="M6.80 9.00L4.81 7.85"/><circle cx="12" cy="12" r="2.6"/></svg>

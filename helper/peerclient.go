@@ -36,6 +36,10 @@ type PeerList struct {
 	// экранированием кавычек, и это уже ломалось.
 	Params []string   `json:"params"`
 	Peers  []PeerInfo `json:"peers"`
+
+	// EndpointHost — публичный адрес сервера. Скрипт его не знает (он смотрит
+	// изнутри), поэтому подставляет клиент, когда собирает vpn://.
+	EndpointHost string `json:"-"`
 }
 
 // ParamsMap разбирает параметры в map для сборки клиентского конфига.

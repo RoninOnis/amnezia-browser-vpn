@@ -374,12 +374,73 @@ function renderUpdates() {
   dl.hidden = !(u.addon && u.addon.outdated && u.pageUrl);
 }
 
+function renderAdmin() {
+  const s = state;
+  const hasServer = !!(s.servers && s.servers.length);
+  const showConnect = !hasServer || !s.peers;
+  $("#adminConnectCard").hidden = hasServer && !!s.peers && !s.peerError;
+  $("#adminPeersCard").hidden = !hasServer && !s.peers;
+
+  const server = s.peerServer || (s.servers[0] && s.servers[0].host) || "";
+  $("#admServer").textContent = server || "—";
+  const peers = s.peers;
+  $("#admContainer").textContent = peers && peers.container
+    ? `${peers.container} · ${peers.subnet || "?"}`
+    : "—";
+
+  if (s.peerBusy) $("#admPeerHint").textContent = "Работаю… это может занять до минуты";
+  else if (s.peerError) $("#admPeerHint").textContent = s.peerError;
+  else if (peers) $("#admPeerHint").textContent = `Ключей на сервере: ${(peers.peers || []).length}`;
+  else $("#admPeerHint").textContent = "";
+
+  const box = $("#admPeers");
+  box.textContent = "";
+  for (const peer of (peers && peers.peers) || []) {
+    const item = document.createElement("div");
+    item.className = "site-row";
+    const left = document.createElement("div");
+    const title = document.createElement("div");
+    title.textContent = peer.name || "без имени";
+    const sub = document.createElement("div");
+    sub.className = "hint";
+    const ago = peer.lastHandshake ? fmtAgo(peer.lastHandshake) : "не подключался";
+    sub.textContent = `${peer.allowedIps || "?"} · ${ago}`;
+    left.appendChild(title);
+    left.appendChild(sub);
+    item.appendChild(left);
+    const del = document.createElement("button");
+    del.className = "btn danger";
+    del.textContent = "Отозвать";
+    del.disabled = !!s.peerBusy;
+    del.addEventListener("click", async () => {
+      if (!confirm(`Отозвать ключ ${peer.allowedIps || ""}? Устройство потеряет доступ.`)) return;
+      const res = await send("revokePeer", { publicKey: peer.publicKey });
+      if (res && res.state) {
+        state = res.state;
+        render();
+      }
+    });
+    item.appendChild(del);
+    box.appendChild(item);
+  }
+
+  const key = s.lastPeerKey;
+  $("#adminKeyCard").hidden = !key;
+  if (key) {
+    $("#admKeyName").textContent = key.name || "клиент";
+    $("#admKeyIp").textContent = key.allowedIps || "—";
+    $("#admKeyLink").value = key.vpnLink || "";
+  }
+  void showConnect;
+}
+
 function render() {
   if (!state) return;
   renderTop();
   renderHome();
   renderServers();
   renderSites();
+  renderAdmin();
   renderSettings();
 }
 
@@ -665,6 +726,89 @@ $("#btnCheckUpdates").addEventListener("click", async () => {
     btn.disabled = false;
     btn.textContent = "Проверить";
   }
+});
+
+/* ---------------------------------------------------------------- Панель */
+
+$("#btnAdminConnect").addEventListener("click", async () => {
+  const btn = $("#btnAdminConnect");
+  const host = $("#admHost").value.trim();
+  const password = $("#admPassword").value;
+  if (!host) {
+    $("#admConnectHint").textContent = "Укажите адрес сервера";
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = "Настраиваю…";
+  $("#admConnectHint").textContent = "Подключаюсь по SSH и ставлю ограниченный доступ…";
+  try {
+    const res = await send("bootstrapServer", {
+      host,
+      port: Number($("#admPort").value) || 22,
+      user: $("#admUser").value.trim() || "root",
+      password,
+    });
+    $("#admPassword").value = "";
+    if (res && res.state) {
+      state = res.state;
+      render();
+    }
+    $("#admConnectHint").textContent = res && res.ok
+      ? "Готово. Пароль больше не нужен и не сохранён."
+      : "Не удалось: " + ((res && res.error) || "нет ответа");
+    if (res && res.ok) await send("loadPeers", { host });
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Подключить и настроить";
+  }
+});
+
+$("#btnAdminRefresh").addEventListener("click", async () => {
+  const res = await send("loadPeers", {});
+  if (res && res.state) {
+    state = res.state;
+    render();
+  }
+});
+
+$("#btnAdminCreate").addEventListener("click", async () => {
+  const name = prompt("Имя устройства (например, «ноутбук»):", "клиент");
+  if (name === null) return;
+  const btn = $("#btnAdminCreate");
+  btn.disabled = true;
+  btn.textContent = "Выпускаю…";
+  try {
+    const res = await send("createPeer", { name });
+    if (res && res.state) {
+      state = res.state;
+      render();
+    }
+    if (res && !res.ok) $("#admPeerHint").textContent = "Не удалось: " + (res.error || "нет ответа");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Новый ключ";
+  }
+});
+
+$("#btnAdminCopy").addEventListener("click", async () => {
+  const link = $("#admKeyLink").value;
+  try {
+    await navigator.clipboard.writeText(link);
+    $("#admKeyHint").textContent = "Ссылка скопирована";
+  } catch (err) {
+    $("#admKeyHint").textContent = "Не удалось скопировать — выделите текст вручную";
+  }
+});
+
+$("#btnAdminAdopt").addEventListener("click", async () => {
+  const res = await send("adoptPanelKey");
+  if (res && res.state) {
+    state = res.state;
+    render();
+  }
+  $("#admKeyHint").textContent = res && res.ok
+    ? "Ключ добавлен в «Серверы» — можно подключаться"
+    : "Не удалось: " + ((res && res.error) || "нет ответа");
 });
 
 $("#btnUpdateHelper").addEventListener("click", async () => {

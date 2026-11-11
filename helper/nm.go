@@ -28,6 +28,14 @@ type nmMessage struct {
 	RelayAddr    string   `json:"relayAddr,omitempty"`
 	RelayToken   string   `json:"relayToken,omitempty"`
 	Force        bool     `json:"force,omitempty"`
+	// панель администратора
+	Host      string `json:"host,omitempty"`
+	SSHPort   int    `json:"sshPort,omitempty"`
+	SSHUser   string `json:"sshUser,omitempty"`
+	Password  string `json:"password,omitempty"`
+	KeyPath   string `json:"keyPath,omitempty"`
+	Name      string `json:"name,omitempty"`
+	PublicKey string `json:"publicKey,omitempty"`
 }
 
 type nmReply struct {
@@ -38,6 +46,9 @@ type nmReply struct {
 	Version string            `json:"version,omitempty"`
 	Update  *UpdateInfo       `json:"update,omitempty"`
 	SelfUp  *SelfUpdateResult `json:"selfUpdate,omitempty"`
+	Peers   *PeerList         `json:"peers,omitempty"`
+	Peer    map[string]any    `json:"peer,omitempty"`
+	Servers []ServerRecord    `json:"servers,omitempty"`
 }
 
 func runNativeMessaging() error {
@@ -121,6 +132,11 @@ func handleNM(msg nmMessage) nmReply {
 		}
 		reply.OK, reply.Error, reply.Status = resp.OK, resp.Error, resp.Status
 		return reply
+	case "peer_bootstrap", "peer_selftest", "peer_list", "peer_create", "peer_revoke", "peer_servers":
+		// Панель администратора. Не требует живого туннеля, поэтому выполняется
+		// прямо здесь, а не через демон: иначе команда падала бы, если демон
+		// ещё не поднят (та же грабля, что была с update_check).
+		return handlePeer(msg, reply)
 	case "self_update":
 		res := selfUpdate()
 		reply.OK = res.Error == ""
@@ -212,6 +228,59 @@ func handleNM(msg nmMessage) nmReply {
 		reply.OK, reply.Error = false, "unknown cmd "+msg.Cmd
 		return reply
 	}
+}
+
+// handlePeer — операции панели. Пароль SSH нигде не сохраняется и не пишется в лог.
+func handlePeer(msg nmMessage, reply nmReply) nmReply {
+	switch msg.Cmd {
+	case "peer_servers":
+		reply.OK = true
+		reply.Servers = loadServers()
+	case "peer_bootstrap":
+		res, err := PeerBootstrap(BootstrapRequest{
+			Host: msg.Host, Port: msg.SSHPort, User: msg.SSHUser,
+			Password: msg.Password, KeyPath: msg.KeyPath,
+		})
+		if err != nil {
+			reply.OK, reply.Error = false, err.Error()
+			return reply
+		}
+		reply.OK = true
+		reply.Peer = res
+		reply.Servers = loadServers()
+	case "peer_selftest":
+		list, err := PeerSelftest(msg.Host, msg.SSHPort)
+		if err != nil {
+			reply.OK, reply.Error = false, err.Error()
+			return reply
+		}
+		reply.OK, reply.Peers = true, list
+	case "peer_list":
+		list, err := PeerListPeers(msg.Host, msg.SSHPort)
+		if err != nil {
+			reply.OK, reply.Error = false, err.Error()
+			return reply
+		}
+		reply.OK, reply.Peers = true, list
+	case "peer_create":
+		res, err := PeerCreate(msg.Host, msg.SSHPort, msg.Name)
+		if err != nil {
+			reply.OK, reply.Error = false, err.Error()
+			return reply
+		}
+		reply.OK = true
+		reply.Peer = res
+		if ok, _ := res["ok"].(bool); !ok {
+			reply.Error, _ = res["error"].(string)
+		}
+	case "peer_revoke":
+		if err := PeerRevoke(msg.Host, msg.SSHPort, msg.PublicKey); err != nil {
+			reply.OK, reply.Error = false, err.Error()
+			return reply
+		}
+		reply.OK = true
+	}
+	return reply
 }
 
 func randomToken() (string, error) {

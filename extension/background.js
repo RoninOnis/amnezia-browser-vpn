@@ -54,6 +54,13 @@ const state = {
   updates: null,      // результат проверки версий аддона и хелпера
   updatingHelper: false, // идёт обновление хелпера
   lastHelperUpdate: null, // {at, ok, from, to, error}
+  // панель администратора
+  servers: [],       // [{host, port, addedAt}]
+  peers: null,       // последний список пиров с сервера
+  peerServer: "",    // для какого сервера этот список
+  peerBusy: false,   // идёт SSH-операция
+  peerError: "",     // текст последней ошибки панели
+  lastPeerKey: null, // {name, allowedIps, vpnLink} — только что выпущенный ключ
 };
 
 const HOST_MISSING = /no such native application|native application .* not found|No such native/i;
@@ -296,6 +303,12 @@ function publicState() {
     updates: state.updates,
     updatingHelper: state.updatingHelper,
     lastHelperUpdate: state.lastHelperUpdate,
+    servers: state.servers,
+    peers: state.peers,
+    peerServer: state.peerServer,
+    peerBusy: state.peerBusy,
+    peerError: state.peerError,
+    lastPeerKey: state.lastPeerKey,
   };
 }
 
@@ -421,6 +434,110 @@ async function updateHelper() {
     } catch (_) {}
     checkVersions(true).catch(() => {});
   }
+}
+
+/* ------------------------------------------------- панель администратора */
+
+// Пароль SSH передаётся в хелпер ТОЛЬКО для первичной настройки и никогда не
+// сохраняется ни в storage, ни в state: дальше работа идёт ключом панели.
+async function bootstrapServer({ host, port, user, password }) {
+  state.peerBusy = true;
+  state.peerError = "";
+  notifyUI();
+  try {
+    const res = await sendNative("peer_bootstrap", {
+      host, sshPort: Number(port) || 22, sshUser: user || "root", password,
+    }, 180000);
+    if (!res || !res.ok) {
+      state.peerError = (res && res.error) || "не удалось настроить сервер";
+      return { ok: false, error: state.peerError };
+    }
+    state.servers = res.servers || [];
+    state.peerServer = host;
+    return { ok: true, selftest: (res.peer && res.peer.selftest) || "" };
+  } finally {
+    state.peerBusy = false;
+    notifyUI();
+  }
+}
+
+async function loadPeers(host) {
+  const target = host || state.peerServer || (state.servers[0] && state.servers[0].host) || "";
+  if (!target) return { ok: false, error: "сервер не выбран" };
+  state.peerBusy = true;
+  state.peerError = "";
+  notifyUI();
+  try {
+    const res = await sendNative("peer_list", { host: target }, 60000);
+    if (!res || !res.ok) {
+      state.peerError = (res && res.error) || "не удалось получить список пиров";
+      return { ok: false, error: state.peerError };
+    }
+    state.peers = res.peers || null;
+    state.peerServer = target;
+    return { ok: true, peers: state.peers };
+  } finally {
+    state.peerBusy = false;
+    notifyUI();
+  }
+}
+
+// Выпуск нового ключа: приватный ключ создаётся в хелпере, сюда приходит только
+// готовая ссылка vpn://.
+async function createPeer(name) {
+  const target = state.peerServer || (state.servers[0] && state.servers[0].host) || "";
+  if (!target) return { ok: false, error: "сервер не выбран" };
+  state.peerBusy = true;
+  state.peerError = "";
+  state.lastPeerKey = null;
+  notifyUI();
+  try {
+    const res = await sendNative("peer_create", { host: target, name: name || "клиент" }, 90000);
+    if (!res || !res.ok) {
+      state.peerError = (res && res.error) || "не удалось выпустить ключ";
+      return { ok: false, error: state.peerError };
+    }
+    state.lastPeerKey = {
+      name: (res.peer && res.peer.name) || name || "клиент",
+      allowedIps: (res.peer && res.peer.allowedIps) || "",
+      publicKey: (res.peer && res.peer.publicKey) || "",
+      vpnLink: (res.peer && res.peer.vpnLink) || "",
+    };
+    await loadPeers(target);
+    return { ok: true, key: state.lastPeerKey };
+  } finally {
+    state.peerBusy = false;
+    notifyUI();
+  }
+}
+
+async function revokePeer(publicKey) {
+  const target = state.peerServer || (state.servers[0] && state.servers[0].host) || "";
+  if (!target) return { ok: false, error: "сервер не выбран" };
+  state.peerBusy = true;
+  state.peerError = "";
+  notifyUI();
+  try {
+    const res = await sendNative("peer_revoke", { host: target, publicKey }, 60000);
+    if (!res || !res.ok) {
+      state.peerError = (res && res.error) || "не удалось отозвать ключ";
+      return { ok: false, error: state.peerError };
+    }
+    if (state.lastPeerKey && state.lastPeerKey.publicKey === publicKey) state.lastPeerKey = null;
+    await loadPeers(target);
+    return { ok: true };
+  } finally {
+    state.peerBusy = false;
+    notifyUI();
+  }
+}
+
+// Готовую ссылку отдаём в наш же список профилей: пользователь сразу видит новый
+// сервер на вкладке «Серверы» и может подключиться.
+async function adoptPanelKey() {
+  const key = state.lastPeerKey;
+  if (!key || !key.vpnLink) return { ok: false, error: "нет выпущенного ключа" };
+  return addProfile(key.vpnLink);
 }
 
 /* -------------------------------------------------------------- operations */
@@ -561,6 +678,11 @@ async function refreshStatus() {
   }
   // Авто-лечение: включено, а туннеля нет (перезагрузка, падение демона, обновление бинаря).
   await ensureTunnel();
+  // Список серверов панели: дешёвая локальная операция, можно ждать.
+  if (!state.servers.length && !state.helperMissing) {
+    const servers = await sendNative("peer_servers", {}, 8000);
+    if (servers && servers.ok && Array.isArray(servers.servers)) state.servers = servers.servers;
+  }
   // Проверку версий делаем один раз за сессию и не ждём её: она ходит в сеть.
   if (!state.updates && !state.helperMissing) checkVersions(false).catch(() => {});
   return publicState();
@@ -606,6 +728,16 @@ browser.runtime.onMessage.addListener((msg) => {
       return Promise.resolve({ ok: true, state: publicState() });
     case "updateHelper":
       return updateHelper();
+    case "bootstrapServer":
+      return bootstrapServer(msg).then((res) => ({ ...res, state: publicState() }));
+    case "loadPeers":
+      return loadPeers(msg.host).then((res) => ({ ...res, state: publicState() }));
+    case "createPeer":
+      return createPeer(msg.name).then((res) => ({ ...res, state: publicState() }));
+    case "revokePeer":
+      return revokePeer(msg.publicKey).then((res) => ({ ...res, state: publicState() }));
+    case "adoptPanelKey":
+      return adoptPanelKey().then((res) => ({ ...res, state: publicState() }));
     case "checkVersions":
       return checkVersions(!!msg.force)
         .then((updates) => ({ ok: true, updates, state: publicState() }))

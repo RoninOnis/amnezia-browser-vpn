@@ -280,11 +280,33 @@ func b64key(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
 // newKeyPair создаёт пару X25519 в том же виде, что WireGuard/AmneziaWG:
 // приватный ключ — 32 байта с клэмпингом, публичный — результат scalar mult.
 func newKeyPair() (priv, pub string, err error) {
-	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	// Зажим как в `wg genkey`: без него приватный ключ не совпадёт с тем, что
+	// генерирует awg, и такой профиль не примут привычные инструменты.
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", "", err
+	}
+	raw[0] &= 248
+	raw[31] &= 127
+	raw[31] |= 64
+	key, err := ecdh.X25519().NewPrivateKey(raw)
 	if err != nil {
 		return "", "", err
 	}
-	return b64key(key.Bytes()), b64key(key.PublicKey().Bytes()), nil
+	return b64key(raw), b64key(key.PublicKey().Bytes()), nil
+}
+
+// publicKeyLineFromPEM достаёт строку authorized_keys из нашего приватного ключа:
+// отдельный файл с публичной частью держать не нужно.
+func publicKeyLineFromPEM(pemBytes []byte) (string, error) {
+	signer, err := ssh.ParsePrivateKey(pemBytes)
+	if err != nil {
+		if _, ok := err.(*ssh.PassphraseMissingError); ok {
+			return "", errors.New("ключ панели защищён паролем — пересоздайте его")
+		}
+		return "", fmt.Errorf("разбор ключа панели: %w", err)
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))) + " awgbv", nil
 }
 
 // newPreshared генерирует PSK для пира.
