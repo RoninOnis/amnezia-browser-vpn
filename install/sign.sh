@@ -31,6 +31,7 @@ cd "$ROOT"
 npx --yes web-ext@8 sign \
   --source-dir extension \
   --artifacts-dir dist/signed \
+  --ignore-files "tests/**" \
   --channel unlisted \
   --api-key "$AMO_API_KEY" \
   --api-secret "$AMO_API_SECRET" \
