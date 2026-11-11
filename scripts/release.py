@@ -59,7 +59,7 @@ def sha256(path):
     return h.hexdigest()
 
 
-def collect(version):
+def collect(version, require_xpi=True):
     """Собирает площадку релиза и возвращает список предупреждений."""
     warn = []
     if os.path.isdir(STAGE):
@@ -67,9 +67,13 @@ def collect(version):
     os.makedirs(STAGE)
 
     xpis = sorted(glob.glob(f"{ROOT}/dist/signed/*{version}*.xpi"))
-    if not xpis:
+    if xpis:
+        shutil.copy(xpis[-1], f"{STAGE}/amnezia-browser-vpn-{version}.xpi")
+    elif require_xpi:
         sys.exit(f"error: нет подписанного .xpi версии {version} в dist/signed/")
-    shutil.copy(xpis[-1], f"{STAGE}/amnezia-browser-vpn-{version}.xpi")
+    else:
+        # проверка до подписи: показываем всё остальное, подпись — отдельный шаг
+        warn.append(f"нет подписанного .xpi {version}: подпись в AMO ещё не сделана")
 
     copy = {
         f"{ROOT}/install/linux/install-remote.sh": "install-linux.sh",
@@ -114,7 +118,7 @@ def main():
     if not (args.check or args.publish):
         sys.exit("укажите --check или --publish")
 
-    warn = collect(args.version)
+    warn = collect(args.version, require_xpi=not args.check)
     print(f"площадка: {STAGE}")
     for name in sorted(os.listdir(STAGE)):
         size = os.path.getsize(os.path.join(STAGE, name))
@@ -134,6 +138,8 @@ def main():
 
     if args.check:
         print("\n--check: ничего не публикую")
+        if any("xpi" in w for w in warn):
+            print("  до публикации осталось: подписать .xpi (./install/sign.sh) — только с одобрения")
         return
 
     tag = f"v{args.version}"
