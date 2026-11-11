@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -57,8 +58,20 @@ func stateDir() string {
 	if d := os.Getenv("AWGBV_STATE_DIR"); d != "" {
 		return d
 	}
-	if base := os.Getenv("LOCALAPPDATA"); base != "" && os.PathSeparator == '\\' {
-		return filepath.Join(base, "AwgBrowserVpn")
+	// Платформу определяем по GOOS, а не по наличию переменной: при пустом
+	// LOCALAPPDATA (урезанное окружение, служба, отладка) раньше молча
+	// срабатывала Linux-ветка, и состояние с ключами панели уезжало в
+	// %USERPROFILE%\.local\state мимо каталога установки.
+	if runtime.GOOS == "windows" {
+		base := os.Getenv("LOCALAPPDATA")
+		if base == "" {
+			if home, err := os.UserHomeDir(); err == nil {
+				base = filepath.Join(home, "AppData", "Local")
+			}
+		}
+		if base != "" {
+			return filepath.Join(base, "AwgBrowserVpn")
+		}
 	}
 	if x := os.Getenv("XDG_STATE_HOME"); x != "" {
 		return filepath.Join(x, appDirName)

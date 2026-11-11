@@ -174,6 +174,40 @@ if run add --pubkey "$PUB3" --psk "$PSK3" --name "сбойный" >/dev/null; th
   grep -q "$PUB3" "$CONF_DIR/awg0.conf" && no "мусорный пир не остался" || check 1 "мусорный пир не остался"
 fi
 
+echo "== безопасность: имя пира не превращается в команду =="
+# Раньше имя подставлялось в строку `bash -c` в одинарных кавычках: такой payload
+# выполнял команду от root внутри контейнера. Проверяем и отказ, и отсутствие следа.
+PWN="$WORK/PWNED"
+for bad in "x'; id > $PWN; : '" 'x$(id)y' 'x`id`y' 'a;b' 'a|b'; do
+  PUB4="IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII="
+  if run add --pubkey "$PUB4" --psk "$PSK1" --name "$bad" >/dev/null 2>&1; then
+    no "имя с метасимволами принято: $bad"
+  else
+    ok "имя отклонено"
+  fi
+done
+[ -e "$PWN" ] && no "КОМАНДА ИЗ ИМЕНИ ВЫПОЛНИЛАСЬ" || check 1 "команда из имени не выполнилась"
+
+echo "== безопасность: PSK других пиров не попадает в список =="
+run list > "$WORK/l2.json" 2>/dev/null || true
+grep -q 'presharedKey' "$WORK/l2.json" && no "PSK утекает в список" || check 1 "PSK не отдаётся в списке"
+
+echo "== путь через \$SSH_ORIGINAL_COMMAND (forced command) =="
+SSH_ORIGINAL_COMMAND=list bash "$SCRIPT" >/dev/null 2>&1 && check 1 "list через переменную работает" || check 0 "list через переменную работает"
+if SSH_ORIGINAL_COMMAND="rm -rf /" bash "$SCRIPT" >/dev/null 2>&1; then
+  no "чужая команда принята"
+else
+  check 1 "чужая команда отвергнута"
+fi
+if SSH_ORIGINAL_COMMAND="add --pubkey zz --psk zz" bash "$SCRIPT" >/dev/null 2>&1; then
+  no "мусорный add принят"
+else
+  check 1 "мусорный add отвергнут"
+fi
+
+echo "== откат не расходует .bak =="
+[ -f "$CONF_DIR/awg0.conf.bak" ] && check 1 "резервная копия на месте после восстановления" || no "резервная копия израсходована"
+
 echo
 if [ "$fail" = "0" ]; then echo "РЕЗУЛЬТАТ: всё прошло"; exit 0; fi
 echo "РЕЗУЛЬТАТ: есть провалы"; exit 1

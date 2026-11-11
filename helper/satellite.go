@@ -44,9 +44,16 @@ func satelliteScriptSource() (string, error) {
 		return string(body), nil
 	}
 	if cached := os.Getenv("AWGBV_SATELLITE_CACHE"); cached != "" {
-		if body, err := os.ReadFile(cached); err == nil && len(body) > 100 {
-			return string(body), nil
+		// маркер обязателен и здесь: иначе через кеш можно подставить произвольный
+		// скрипт, который выполнится от root на чужом сервере
+		body, err := os.ReadFile(cached)
+		if err != nil {
+			return "", fmt.Errorf("AWGBV_SATELLITE_CACHE: %w", err)
 		}
+		if !strings.Contains(string(body), "awgbv-satellite") || len(body) < 100 {
+			return "", errors.New("файл по AWGBV_SATELLITE_CACHE не похож на наш установщик")
+		}
+		return string(body), nil
 	}
 	release, err := fetchRelease()
 	if err != nil {
@@ -74,21 +81,26 @@ func satelliteScriptSource() (string, error) {
 	if _, err := downloadTo(url, path); err != nil {
 		return "", err
 	}
-	if sumsURL != "" {
-		sumsPath := path + ".sums"
-		if _, err := downloadTo(sumsURL, sumsPath); err == nil {
-			raw, _ := os.ReadFile(sumsPath)
-			_ = os.Remove(sumsPath)
-			if want, ok := parseSums(string(raw))["install-satellite.sh"]; ok {
-				got, err := fileSHA256(path)
-				if err != nil {
-					return "", err
-				}
-				if got != want {
-					return "", fmt.Errorf("sha256 install-satellite.sh не совпал: ожидался %.12s, получен %.12s", want, got)
-				}
-			}
-		}
+	// Сверка обязательна: установщик спутника запускается от root на сервере.
+	if sumsURL == "" {
+		return "", errors.New("в релизе нет SHA256SUMS — не могу проверить install-satellite.sh, установка отменена")
+	}
+	sumsPath := path + ".sums"
+	if _, err := downloadTo(sumsURL, sumsPath); err != nil {
+		return "", fmt.Errorf("не удалось скачать SHA256SUMS: %w", err)
+	}
+	raw, _ := os.ReadFile(sumsPath)
+	_ = os.Remove(sumsPath)
+	want, ok := parseSums(string(raw))["install-satellite.sh"]
+	if !ok {
+		return "", errors.New("в SHA256SUMS нет строки install-satellite.sh — установка отменена")
+	}
+	got, err := fileSHA256(path)
+	if err != nil {
+		return "", err
+	}
+	if got != want {
+		return "", fmt.Errorf("sha256 install-satellite.sh не совпал: ожидался %.12s, получен %.12s", want, got)
 	}
 	body, err := os.ReadFile(path)
 	if err != nil {
@@ -121,7 +133,7 @@ func SatelliteRun(req SatelliteRequest) (*SatelliteResult, error) {
 		port = 22
 	}
 	cfg := SSHConfig{
-		Addr:     fmt.Sprintf("%s:%d", req.Host, port),
+		Addr:     AddrFor(req.Host, port),
 		User:     user,
 		Password: req.Password,
 		KeyPath:  req.KeyPath,
@@ -131,6 +143,8 @@ func SatelliteRun(req SatelliteRequest) (*SatelliteResult, error) {
 		return nil, err
 	}
 	defer cl.Close()
+	// установка спутника качает бинарь и правит systemd — 45 секунд ей мало
+	cl.long = true
 
 	args := []string{}
 	if req.DryRun {

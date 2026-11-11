@@ -29,7 +29,12 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --target)    TARGET="$2"; shift 2 ;;
     --container) CONTAINER="$2"; shift 2 ;;
-    --port)      LISTEN_PORT="$2"; shift 2 ;;
+    --port)
+      case "${2:-}" in
+        ''|*[!0-9]*) echo "--port принимает только число" >&2; exit 1 ;;
+      esac
+      if [ "$2" -lt 1 ] || [ "$2" -gt 65535 ]; then echo "--port вне диапазона 1-65535" >&2; exit 1; fi
+      LISTEN_PORT="$2"; shift 2 ;;
     --dry-run)   DRY_RUN=1; shift ;;
     --open-firewall) OPEN_FIREWALL=1; shift ;;
     -h|--help)   sed -n '2,18p' "$0"; exit 0 ;;
@@ -207,6 +212,13 @@ TOKEN=$TOKEN
 EOF2
 chmod 600 /etc/awgbv-satellite.env
 
+# Токен в фиксированном режиме не нужен. Если он пуст, флаг НЕ передаём: иначе
+# systemd отбрасывает пустое слово, и бинарь падает с «flag needs an argument».
+TOKEN_ARG=""
+if [ -n "$TOKEN" ]; then
+  TOKEN_ARG="--relay-token ${TOKEN}"
+fi
+
 cat > /etc/systemd/system/awgbv-satellite.service <<'EOF2'
 [Unit]
 Description=awgbv satellite (AmneziaWG reachable on udp/443)
@@ -216,11 +228,27 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/awgbv-satellite.env
-ExecStart=/usr/local/bin/awgbv-satellite --relay-serve --relay-listen ${LISTEN} --relay-target ${TARGET} --relay-token ${TOKEN}
+ExecStart=/usr/local/bin/awgbv-satellite --relay-serve --relay-listen ${LISTEN} --relay-target ${TARGET} ${TOKEN_ARG}
 Restart=always
 RestartSec=3
+# Релею нужно ровно одно право — слушать 443/udp. Всё остальное отбираем:
+# при ошибке в релее это разница между «упал сервис» и «root на хосте».
 NoNewPrivileges=yes
 PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+ReadWritePaths=/run
 
 [Install]
 WantedBy=multi-user.target

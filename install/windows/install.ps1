@@ -30,6 +30,9 @@ if (-not (Test-Path $Binary)) {
 }
 
 New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
+# Windows не даёт перезаписать запущенный exe: сначала останавливаем хелпер,
+# иначе обновление поверх работающего демона падает с «отказано в доступе».
+if (Test-Path $TargetExe) { & $TargetExe --stop 2>$null; Start-Sleep -Milliseconds 800 }
 Copy-Item -Force $Binary $TargetExe
 Write-Host "installed binary: $TargetExe"
 

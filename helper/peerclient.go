@@ -185,7 +185,7 @@ const peerScriptMarker = "AWGBV_PEER_SCRIPT_EOF"
 // sudo и добавить наш ключ с restrict+command.
 //
 // Скрипт идемпотентен: повторный запуск ничего не портит и не плодит дубли.
-func BootstrapScript(peerScript, authorizedKeyLine string) string {
+func BootstrapScript(peerScript, authorizedKeyLine string) (string, error) {
 	var b bytes.Buffer
 	b.WriteString("set -eu\n")
 	b.WriteString("PEER_BIN=/usr/local/sbin/awgbv-peer\n")
@@ -242,7 +242,11 @@ func BootstrapScript(peerScript, authorizedKeyLine string) string {
 		// Строку с нашим ключом ПЕРЕЗАПИСЫВАЕМ, а не пропускаем при наличии:
 		// иначе после исправления формата forced command на сервере остаётся
 		// старая строка, и обновление установщика ничего не меняет.
-		keyBlob := strings.Fields(authorizedKeyLine)[1]
+		keyFields := strings.Fields(authorizedKeyLine)
+		if len(keyFields) < 2 {
+			return "", errors.New("строка публичного ключа панели пустая или в неверном формате")
+		}
+		keyBlob := keyFields[1]
 		b.WriteString("if grep -qF " + shellQuote(keyBlob) + " \"$AUTH\"; then\n")
 		b.WriteString("  grep -vF " + shellQuote(keyBlob) + " \"$AUTH\" > \"$AUTH.tmp\" || true\n")
 		b.WriteString("  mv \"$AUTH.tmp\" \"$AUTH\"\n")
@@ -252,17 +256,24 @@ func BootstrapScript(peerScript, authorizedKeyLine string) string {
 		b.WriteString("chmod 0600 \"$AUTH\"\n\n")
 	}
 
-	b.WriteString("sudo -u \"$PEER_USER\" sudo -n \"$PEER_BIN\" selftest\n")
-	return b.String()
+	// selftest — диагностика, а не условие успеха: если контейнер сейчас
+	// остановлен, установка всё равно состоялась, и врать про ошибку нельзя
+	b.WriteString("sudo -u \"$PEER_USER\" sudo -n \"$PEER_BIN\" selftest 2>&1 || echo 'ПРЕДУПРЕЖДЕНИЕ: контейнер AmneziaWG не ответил на selftest'\n")
+	return b.String(), nil
 }
 
 // BootstrapPeerAccess выполняет первичную настройку по полному SSH (root).
 // Вызывается один раз: дальше работа идёт ограниченным ключом.
 func BootstrapPeerAccess(cfg SSHConfig, peerScript, authorizedKeyLine string) (string, error) {
+	script, err := BootstrapScript(peerScript, authorizedKeyLine)
+	if err != nil {
+		return "", err
+	}
 	cl, err := DialSSH(cfg)
 	if err != nil {
 		return "", err
 	}
 	defer cl.Close()
-	return cl.RunScript(BootstrapScript(peerScript, authorizedKeyLine))
+	cl.long = true
+	return cl.RunScript(script)
 }

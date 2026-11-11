@@ -50,30 +50,55 @@ def main(path):
     check(not non_ascii, f"сообщения только ASCII (не-ASCII: {''.join(non_ascii[:12])})")
 
     low = text.lower()
+    # У удалялки другой набор требований: ей не нужны curl/certutil/сверка суммы,
+    # зато нужно снять регистрацию, остановить хелпер и отодвинуть занятый exe.
+    is_uninstall = "uninstall" in path.lower()
     # упоминание в комментарии («pure batch, no PowerShell») — не вызов
     calls = [ln for ln in text.splitlines()
              if not ln.strip().lower().startswith(("rem ", "rem\t", "::"))
              and re.search(r"(^|[&|(]\s*|\bcall\s+)powershell", ln, re.I)]
     check(not calls, f"нет вызовов powershell (найдено {len(calls)})")
     check(".ps1" not in low, "не запускает .ps1")
-    check("curl.exe" in low, "скачивание через curl.exe (есть в Windows 10+)")
-    check("certutil" in low, "sha256 через certutil -hashfile")
-    check("sha256sums" in low, "сверяет с SHA256SUMS")
-    check(re.search(r"reg\s+add\s+.*hkcu", low) is not None, "регистрация в HKCU (без админа)")
-    check("nativemessaginghosts" in low.replace(" ", ""), "путь NativeMessagingHosts")
+    if is_uninstall:
+        check(re.search(r"reg\s+delete\s+.*hkcu", low) is not None, "снимает регистрацию в HKCU")
+        check('--stop' in low, "останавливает хелпер перед удалением")
+        check(re.search(r"move\s+/y\s+\"%target_exe%\"", text, re.I) is not None, "отодвигает занятый exe перед удалением")
+        check("rmdir" in low, "удаляет каталог установки")
+    else:
+        check("curl.exe" in low, "скачивание через curl.exe (есть в Windows 10+)")
+        check("certutil" in low, "sha256 через certutil -hashfile")
+        check("sha256sums" in low, "сверяет с SHA256SUMS")
+    # Манифест и ветку реестра пишет сам хелпер: cmd.exe кодирует текст кодовой
+    # страницей консоли, и у пользователя с нелатинским именем в LOCALAPPDATA
+    # Firefox не мог прочитать JSON. Поэтому проверяем ОБРАТНОЕ: что JSON не
+    # собирается через echo и что вызывается --install-manifest.
+    if not is_uninstall:
+        check("--install-manifest" in low, "манифест пишет хелпер (--install-manifest)")
+    builds_json = re.search(r'>\s*"%target_json%"\s*\(', text, re.I) is not None
+    check(not builds_json, "JSON не собирается через echo (кодировка консоли)")
+
+    # обновление поверх работающего exe: Windows не даёт записать в занятый файл,
+    # поэтому установщик обязан остановить хелпер и/или отодвинуть .exe в сторону
+    if not is_uninstall:
+        check(re.search(r'"%target_exe%"\s+--stop', text, re.I) is not None, "останавливает хелпер перед заменой exe")
+        check(re.search(r"move\s+/y\s+\"%target_exe%\"", text, re.I) is not None, "отодвигает занятый exe в .old перед копированием")
 
     uses_bang = re.search(r"![A-Za-z_][A-Za-z0-9_]*!", text) is not None
     has_expansion = "enabledelayedexpansion" in low
     if uses_bang:
         check(has_expansion, "есть setlocal enabledelayedexpansion (используются !VAR!)")
 
-    # экранирование пути внутри JSON манифеста
-    if re.search(r":\\=\\\\\\", text) or re.search(r":\\=\\\\", text):
-        print(f"  {OK} экранирование пути для JSON (set VAR:\\\\=\\\\)")
-    else:
-        msg = "экранирование пути для JSON (set VAR:\\=\\)"
+    # Путь в JSON экранировать больше не нужно: манифест пишет хелпер через
+    # encoding/json. Проверяем, что ручной сборки пути в JSON не осталось.
+    # именно ручная сборка JSON-пути (EXE_JSON с удвоенными слешами), а не
+    # безобидная переменная TARGET_JSON с путём к файлу
+    manual = re.search(r"set\s+\"?EXE_JSON|:\\\\=\\\\\\\\", text, re.I) is not None
+    if manual:
+        msg = "путь для JSON собирается вручную (должен писать хелпер)"
         print(f"  {BAD} {msg}")
         errors.append(msg)
+    else:
+        print(f"  {OK} путь в JSON не собирается вручную")
 
     # манифест должен быть валидным JSON: собираем его так, как это делает batch
     m = re.search(r'"path"\s*:\s*"([^"]+)"', text)

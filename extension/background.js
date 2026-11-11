@@ -10,6 +10,10 @@
 
 const NATIVE_HOST = "awgbv";
 const STATE_KEY = "settings";
+// Выпущенный ключ панели — единственная копия ссылки vpn://, и сервер её не хранит.
+// Держим её в storage.session: перезапуск самой event-страницы (она живёт секунды)
+// ссылку больше не теряет, а закрытие браузера — очищает, о чём честно сказано в карточке.
+const SESSION_KEY = "lastPeerKey";
 const POLL_ALARM = "awgbv-poll";
 const LOOPBACK = /^(localhost|127\.\d+\.\d+\.\d+|::1|\[::1\]|.*\.local|.*\.localhost)$/i;
 
@@ -442,6 +446,26 @@ async function updateHelper() {
 
 /* ------------------------------------------------- панель администратора */
 
+// storage.session может отсутствовать (старые сборки): тогда ключ живёт только
+// в памяти, как раньше, но интерфейс не падает.
+async function saveSessionKey(key) {
+  state.lastPeerKey = key;
+  try {
+    if (key) await browser.storage.session.set({ [SESSION_KEY]: key });
+    else await browser.storage.session.remove(SESSION_KEY);
+  } catch (_) {}
+}
+
+async function loadSessionKey() {
+  try {
+    const got = await browser.storage.session.get(SESSION_KEY);
+    state.lastPeerKey = (got && got[SESSION_KEY]) || null;
+  } catch (_) {
+    state.lastPeerKey = null;
+  }
+  return state.lastPeerKey;
+}
+
 // Пароль SSH передаётся в хелпер ТОЛЬКО для первичной настройки и никогда не
 // сохраняется ни в storage, ни в state: дальше работа идёт ключом панели.
 async function bootstrapServer({ host, port, user, password }) {
@@ -488,25 +512,36 @@ async function loadPeers(host) {
 
 // Выпуск нового ключа: приватный ключ создаётся в хелпере, сюда приходит только
 // готовая ссылка vpn://.
+//
+// Успех — это НЕ res.ok. Хелпер отвечает ok=true и при неудачной сборке ссылки:
+// внутри лежит peer.ok=false и пустой vpnLink (а с будущей версией — ещё и
+// reply.ok=false). Без проверки ссылки попап показывал «Новый ключ готов»
+// с пустым полем, и пользователь оставался без ключа и без ошибки.
 async function createPeer(name) {
   const target = state.peerServer || (state.servers[0] && state.servers[0].host) || "";
   if (!target) return { ok: false, error: "сервер не выбран" };
   state.peerBusy = true;
   state.peerError = "";
-  state.lastPeerKey = null;
+  await saveSessionKey(null);
   notifyUI();
   try {
     const res = await sendNative("peer_create", { host: target, name: name || "клиент" }, 90000);
-    if (!res || !res.ok) {
-      state.peerError = (res && res.error) || "не удалось выпустить ключ";
+    const peer = (res && res.peer) || {};
+    const vpnLink = String(peer.vpnLink || "");
+    const peerOk = peer.ok !== false;
+    if (!res || res.ok !== true || !peerOk || !vpnLink) {
+      state.peerError = ((!res || res.ok !== true) && res && res.error)
+        || peer.error
+        || "хелпер не вернул ссылку vpn:// — ключ не выпущен";
       return { ok: false, error: state.peerError };
     }
-    state.lastPeerKey = {
-      name: (res.peer && res.peer.name) || name || "клиент",
-      allowedIps: (res.peer && res.peer.allowedIps) || "",
-      publicKey: (res.peer && res.peer.publicKey) || "",
-      vpnLink: (res.peer && res.peer.vpnLink) || "",
-    };
+    await saveSessionKey({
+      name: peer.name || name || "клиент",
+      allowedIps: peer.allowedIps || "",
+      publicKey: peer.publicKey || "",
+      vpnLink,
+      adopted: false,
+    });
     await loadPeers(target);
     return { ok: true, key: state.lastPeerKey };
   } finally {
@@ -527,7 +562,7 @@ async function revokePeer(publicKey) {
       state.peerError = (res && res.error) || "не удалось отозвать ключ";
       return { ok: false, error: state.peerError };
     }
-    if (state.lastPeerKey && state.lastPeerKey.publicKey === publicKey) state.lastPeerKey = null;
+    if (state.lastPeerKey && state.lastPeerKey.publicKey === publicKey) await saveSessionKey(null);
     await loadPeers(target);
     return { ok: true };
   } finally {
@@ -537,11 +572,17 @@ async function revokePeer(publicKey) {
 }
 
 // Готовую ссылку отдаём в наш же список профилей: пользователь сразу видит новый
-// сервер на вкладке «Серверы» и может подключиться.
+// сервер на вкладке «Серверы» и может подключиться. Повторное нажатие не плодит
+// дубликаты: addProfile возвращает уже существующий профиль по той же ссылке.
 async function adoptPanelKey() {
   const key = state.lastPeerKey;
   if (!key || !key.vpnLink) return { ok: false, error: "нет выпущенного ключа" };
-  return addProfile(key.vpnLink);
+  const res = await addProfile(key.vpnLink);
+  if (res && res.ok) {
+    // кнопка в попапе после успеха скрывается: второй раз добавлять нечего
+    await saveSessionKey({ ...key, adopted: true });
+  }
+  return res;
 }
 
 // Спутник ставится системной службой от root, поэтому это ОТДЕЛЬНОЕ действие с
@@ -719,6 +760,18 @@ async function refreshStatus() {
 /* --------------------------------------------------------- profile handling */
 
 async function addProfile(link) {
+  const clean = String(link || "").trim();
+  // Та же ссылка уже добавлена (например, повторное «Добавить в мои серверы»):
+  // возвращаем существующий профиль, а не второй такой же в списке «Серверы».
+  const existing = state.settings.profiles.find((p) => p.link && p.link === clean);
+  if (existing) {
+    return {
+      ok: true,
+      id: existing.id,
+      duplicate: true,
+      profile: { id: existing.id, name: existing.name, endpoint: existing.endpoint },
+    };
+  }
   const parsed = await awgbvDecodeVpn(link);
   const id = "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const entry = {
@@ -728,7 +781,7 @@ async function addProfile(link) {
     container: parsed.container || "",
     clientIp: parsed.clientIp,
     addedAt: Date.now(),
-    link: String(link).trim(),
+    link: clean,
     profile: parsed,
   };
   const profiles = [...state.settings.profiles, entry];

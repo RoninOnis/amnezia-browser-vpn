@@ -34,26 +34,27 @@ func maskToken(t string) string {
 
 func main() {
 	var (
-		daemonMode   = flag.Bool("daemon", false, "run as the background helper daemon")
-		connectTo    = flag.String("connect", "", "profile to connect: vpn:// link, .conf file path or JSON file path")
-		listenAddr   = flag.String("listen", "127.0.0.1:0", "SOCKS5 listen address (loopback only)")
-		foreground   = flag.Bool("foreground", false, "keep the tunnel in the foreground (no daemon, for debugging)")
-		doStatus     = flag.Bool("status", false, "print daemon/tunnel status as JSON")
-		doStop       = flag.Bool("stop", false, "disconnect and stop the helper daemon")
-		dumpProf     = flag.String("dump-profile", "", "parse a vpn:// link / .conf and print the normalised profile JSON")
-		showVer      = flag.Bool("version", false, "print version")
-		selfUpFlag   = flag.Bool("self-update", false, "download the latest release and replace this binary")
-		mtuFlag      = flag.Int("mtu", 0, "override profile MTU (0 = use profile value)")
-		mtuAuto      = flag.Bool("mtu-auto", false, "walk MTU down until a handshake appears")
-		portFallback = flag.Bool("port-fallback", false, "additionally try port 443 (server-side satellite, QUIC-only networks)")
-		portFlag     = flag.Int("port", 0, "override server UDP port (0 = use profile value)")
-		relayAddr    = flag.String("relay-addr", "", "relay address (\"host:443\") used as a last resort when UDP is filtered")
-		relayToken   = flag.String("relay-token", "", "relay auth token")
-		relayOnly    = flag.Bool("relay-only", false, "skip direct attempts and use only the relay")
-		relayServe   = flag.Bool("relay-serve", false, "run as a UDP relay (server side)")
-		relayListen  = flag.String("relay-listen", "0.0.0.0:443", "relay listen address for --relay-serve")
-		relayAllow   = flag.String("relay-allow", "", "comma-separated allowed upstream targets for --relay-serve")
-		relayTarget  = flag.String("relay-target", "", "fixed local target for --relay-serve (\"127.0.0.1:36853\"), typically the AWG port on the same host")
+		daemonMode    = flag.Bool("daemon", false, "run as the background helper daemon")
+		connectTo     = flag.String("connect", "", "profile to connect: vpn:// link, .conf file path or JSON file path")
+		listenAddr    = flag.String("listen", "127.0.0.1:0", "SOCKS5 listen address (loopback only)")
+		foreground    = flag.Bool("foreground", false, "keep the tunnel in the foreground (no daemon, for debugging)")
+		doStatus      = flag.Bool("status", false, "print daemon/tunnel status as JSON")
+		doStop        = flag.Bool("stop", false, "disconnect and stop the helper daemon")
+		dumpProf      = flag.String("dump-profile", "", "parse a vpn:// link / .conf and print the normalised profile JSON")
+		showVer       = flag.Bool("version", false, "print version")
+		selfUpFlag    = flag.Bool("self-update", false, "download the latest release and replace this binary")
+		mtuFlag       = flag.Int("mtu", 0, "override profile MTU (0 = use profile value)")
+		mtuAuto       = flag.Bool("mtu-auto", false, "walk MTU down until a handshake appears")
+		portFallback  = flag.Bool("port-fallback", false, "additionally try port 443 (server-side satellite, QUIC-only networks)")
+		portFlag      = flag.Int("port", 0, "override server UDP port (0 = use profile value)")
+		relayAddr     = flag.String("relay-addr", "", "relay address (\"host:443\") used as a last resort when UDP is filtered")
+		relayToken    = flag.String("relay-token", "", "relay auth token")
+		relayOnly     = flag.Bool("relay-only", false, "skip direct attempts and use only the relay")
+		relayServe    = flag.Bool("relay-serve", false, "run as a UDP relay (server side)")
+		relayListen   = flag.String("relay-listen", "0.0.0.0:443", "relay listen address for --relay-serve")
+		relayAllow    = flag.String("relay-allow", "", "comma-separated allowed upstream targets for --relay-serve")
+		relayTarget   = flag.String("relay-target", "", "fixed local target for --relay-serve (\"127.0.0.1:36853\"), typically the AWG port on the same host")
+		writeManifest = flag.Bool("install-manifest", false, "write the native-messaging manifest (UTF-8) and register it (Windows: HKCU)")
 	)
 	flag.Parse()
 
@@ -109,6 +110,17 @@ func main() {
 			log.Printf("daemon: %v", err)
 			os.Exit(1)
 		}
+		return
+	case *writeManifest:
+		// Манифест пишет сам бинарь: batch-установщик пишет файл в кодировке
+		// консоли, и у пользователя с нелатинским именем в пути Firefox не мог
+		// прочитать JSON («No such native application awgbv»).
+		path, err := installManifest()
+		if err != nil {
+			printJSON(map[string]any{"ok": false, "error": err.Error(), "path": path})
+			os.Exit(1)
+		}
+		printJSON(map[string]any{"ok": true, "path": path, "registered": canRegisterManifest()})
 		return
 	case *doStatus:
 		printJSON(statusOrStopped())

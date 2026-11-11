@@ -382,7 +382,10 @@ func TestBootstrapScriptContent(t *testing.T) {
 // Повторный бутстрап не должен ломать конфигурацию: скрипт идемпотентен,
 // ключ добавляется только если его ещё нет.
 func TestBootstrapScriptIsIdempotent(t *testing.T) {
-	body := BootstrapScript("#!/bin/sh\ntrue\n", "ssh-ed25519 AAAAKEY x")
+	body, err := BootstrapScript("#!/bin/sh\ntrue\n", "ssh-ed25519 AAAAKEY x")
+	if err != nil {
+		t.Fatalf("BootstrapScript: %v", err)
+	}
 	if strings.Count(body, "grep -qF") != 1 {
 		t.Fatalf("проверка наличия ключа должна быть одна: %s", body)
 	}

@@ -19,7 +19,9 @@ build() {
     go build -trimpath -ldflags "-s -w -buildid= -X main.version=$VERSION" -o "$DIST/$out" . )
 }
 
-ARCHS="${ARCHS:-amd64}"
+# arm64 обязателен: установщик определяет архитектуру и на Windows on ARM просит
+# awgbv-windows-arm64.exe — без него установка падала на 404.
+ARCHS="${ARCHS:-amd64 arm64}"
 
 for arch in $ARCHS; do
   build linux   "$arch" "awgbv-linux-$arch"

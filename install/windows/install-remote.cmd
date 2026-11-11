@@ -69,23 +69,28 @@ if /i not "!ACTUAL!"=="!EXPECT!" goto :err_hash
 rem ----------------------------------------------------------------- 4. install
 echo  [4/4] installing ...
 if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%" >nul 2>&1
-copy /y "%TMP%\%ASSET%" "%TARGET_EXE%" >nul
+
+rem Windows does not allow overwriting a running exe, and the helper almost always
+rem runs (auto connect is on by default). Stop it first, then copy.
+if exist "%TARGET_EXE%" "%TARGET_EXE%" --stop >nul 2>&1
+if exist "%TARGET_EXE%" ping -n 3 127.0.0.1 >nul
+
+copy /y "%TMP%\%ASSET%" "%TARGET_EXE%" >nul 2>&1
+if not errorlevel 1 goto :copied
+
+rem Still locked: renaming a mapped image IS allowed, so move it aside and retry.
+move /y "%TARGET_EXE%" "%TARGET_EXE%.old" >nul 2>&1
+copy /y "%TMP%\%ASSET%" "%TARGET_EXE%" >nul 2>&1
 if errorlevel 1 goto :err_copy
+del /f /q "%TARGET_EXE%.old" >nul 2>&1
+:copied
 
-set "EXE_JSON=!TARGET_EXE:\=\\!"
-> "%TARGET_JSON%" (
-  echo {
-  echo   "name": "%HOST_NAME%",
-  echo   "description": "AmneziaWG browser tunnel helper",
-  echo   "path": "!EXE_JSON!",
-  echo   "type": "stdio",
-  echo   "allowed_extensions": ["%EXT_ID%"]
-  echo }
-)
+rem The manifest must be written by the helper: cmd.exe encodes text with the
+rem console code page, so a non-latin user name in LOCALAPPDATA gave a manifest
+rem Firefox could not read ("No such native application awgbv").
+"%TARGET_EXE%" --install-manifest >nul 2>&1
+if errorlevel 1 goto :err_manifest
 if not exist "%TARGET_JSON%" goto :err_manifest
-
-reg add "HKCU\Software\Mozilla\NativeMessagingHosts\%HOST_NAME%" /ve /d "%TARGET_JSON%" /f >nul 2>&1
-if errorlevel 1 goto :err_registry
 
 rmdir /s /q "%TMP%" >nul 2>&1
 

@@ -93,7 +93,7 @@ func fileSHA256(path string) (string, error) {
 // downloadTo качает url в dst с ограничением размера: 200 МБ с запасом,
 // чтобы кривой ответ не забил диск.
 func downloadTo(url, dst string) (int64, error) {
-	client := &http.Client{Timeout: 5 * time.Minute}
+	client := httpClient(5 * time.Minute)
 	resp, err := client.Get(url)
 	if err != nil {
 		return 0, fmt.Errorf("скачивание: %w", err)
@@ -169,7 +169,9 @@ func selfUpdate() SelfUpdateResult {
 	}
 
 	dir := filepath.Dir(exe)
-	tmp, err := os.CreateTemp(dir, ".awgbv-update-*")
+	// На Windows запускать файл без расширения .exe — лотерея (CreateProcess не
+	// подставляет расширение для абсолютного пути), поэтому шаблон с суффиксом.
+	tmp, err := os.CreateTemp(dir, ".awgbv-update-*"+exeSuffix())
 	if err != nil {
 		res.Error = "нет прав на запись рядом с хелпером: " + err.Error()
 		return res

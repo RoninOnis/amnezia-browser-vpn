@@ -110,7 +110,7 @@ func adminConfig(host string, port int) SSHConfig {
 		port = 22
 	}
 	return SSHConfig{
-		Addr:    fmt.Sprintf("%s:%d", host, port),
+		Addr:    AddrFor(host, port),
 		User:    "awgbv",
 		KeyPath: sshKeyPath(),
 	}
@@ -147,7 +147,7 @@ func PeerBootstrap(req BootstrapRequest) (map[string]any, error) {
 		port = 22
 	}
 	cfg := SSHConfig{
-		Addr:     fmt.Sprintf("%s:%d", req.Host, port),
+		Addr:     AddrFor(req.Host, port),
 		User:     user,
 		Password: req.Password,
 		KeyPath:  req.KeyPath,
@@ -203,21 +203,27 @@ func peerScriptSource() (string, error) {
 	if _, err := downloadTo(url, path); err != nil {
 		return "", err
 	}
-	if sumsURL != "" {
-		sumsPath := path + ".sums"
-		if _, err := downloadTo(sumsURL, sumsPath); err == nil {
-			raw, _ := os.ReadFile(sumsPath)
-			_ = os.Remove(sumsPath)
-			if want, ok := parseSums(string(raw))["awgbv-peer.sh"]; ok {
-				got, err := fileSHA256(path)
-				if err != nil {
-					return "", err
-				}
-				if got != want {
-					return "", fmt.Errorf("sha256 awgbv-peer.sh не совпал: ожидался %s, получен %s", want[:12], got[:12])
-				}
-			}
-		}
+	// Сверка ОБЯЗАТЕЛЬНА. Раньше при отсутствии SHA256SUMS или строки в нём скрипт
+	// молча уезжал на сервер и запускался от root без единой проверки.
+	if sumsURL == "" {
+		return "", errors.New("в релизе нет SHA256SUMS — не могу проверить awgbv-peer.sh, установка отменена")
+	}
+	sumsPath := path + ".sums"
+	if _, err := downloadTo(sumsURL, sumsPath); err != nil {
+		return "", fmt.Errorf("не удалось скачать SHA256SUMS: %w", err)
+	}
+	raw, _ := os.ReadFile(sumsPath)
+	_ = os.Remove(sumsPath)
+	want, ok := parseSums(string(raw))["awgbv-peer.sh"]
+	if !ok {
+		return "", errors.New("в SHA256SUMS нет строки awgbv-peer.sh — установка отменена")
+	}
+	got, err := fileSHA256(path)
+	if err != nil {
+		return "", err
+	}
+	if got != want {
+		return "", fmt.Errorf("sha256 awgbv-peer.sh не совпал: ожидался %.12s, получен %.12s", want, got)
 	}
 	body, err := os.ReadFile(path)
 	if err != nil {

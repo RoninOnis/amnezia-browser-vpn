@@ -10,9 +10,11 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,9 +38,28 @@ type SSHConfig struct {
 
 // SSHClient — обёртка над одним подключением. Операции короткие: подключились,
 // выполнили одну команду, закрыли.
+// cmdTimeout — предел ожидания одного глагола. Установка спутника качает
+// бинарь и правит systemd, ей нужен запас побольше.
+func (c *SSHClient) cmdTimeout() time.Duration {
+	if c.long {
+		return 300 * time.Second
+	}
+	return 45 * time.Second
+}
+
 type SSHClient struct {
 	cfg  SSHConfig
 	conn *ssh.Client
+	// long — операция длинная (установка спутника: скачивание бинаря + systemd)
+	long bool
+}
+
+// AddrFor собирает host:port так, чтобы IPv6-литерал не превращался в «::1:22».
+func AddrFor(host string, port int) string {
+	if port == 0 {
+		port = 22
+	}
+	return net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(port))
 }
 
 // knownHostsPath — файл с отпечатками серверов, по строке на сервер.
@@ -204,6 +225,31 @@ func (c *SSHClient) Run(cmd string) (string, error) {
 	return text, nil
 }
 
+// runWithTimeout запускает команду сессии и снимает её по дедлайну.
+// Без этого зависший `docker exec` на сервере блокировал NM-процесс навсегда:
+// кадры обрабатываются последовательно, и расширение решало, что хелпер умер.
+func (c *SSHClient) runWithTimeout(session *ssh.Session, cmd string, stdout, stderr io.Writer, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	session.Stdout = stdout
+	session.Stderr = stderr
+	if err := session.Start(cmd); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- session.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(timeout):
+		_ = session.Signal(ssh.SIGKILL)
+		_ = session.Close()
+		<-done
+		return fmt.Errorf("сервер не ответил за %s", timeout)
+	}
+}
+
 // RunStdout выполняет команду и возвращает ТОЛЬКО stdout: ответы awgbv-peer —
 // это JSON, и подмешанная диагностика из stderr сломала бы разбор.
 func (c *SSHClient) RunStdout(cmd string) (string, error) {
@@ -213,9 +259,7 @@ func (c *SSHClient) RunStdout(cmd string) (string, error) {
 	}
 	defer session.Close()
 	var out, errb bytes.Buffer
-	session.Stdout = &out
-	session.Stderr = &errb
-	if err := session.Run(cmd); err != nil {
+	if err := c.runWithTimeout(session, cmd, &out, &errb, c.cmdTimeout()); err != nil {
 		// Пользователю нужна причина, а не «Process exited with status 1»:
 		// серверный скрипт печатает человеческий текст, его и отдаём.
 		msg := strings.TrimSpace(errb.String())
@@ -245,9 +289,7 @@ func (c *SSHClient) RunScriptArgs(script string, args []string) (string, error) 
 	}
 	session.Stdin = strings.NewReader(script)
 	var out, errb bytes.Buffer
-	session.Stdout = &out
-	session.Stderr = &errb
-	err = session.Run(cmd)
+	err = c.runWithTimeout(session, cmd, &out, &errb, c.cmdTimeout())
 	// stderr скрипта — это его же пояснения, поэтому отдаём оба потока
 	text := out.String()
 	if errb.Len() > 0 {

@@ -78,6 +78,7 @@ def collect(version, require_xpi=True):
     copy = {
         f"{ROOT}/install/linux/install-remote.sh": "install-linux.sh",
         f"{ROOT}/install/windows/install-remote.cmd": "install-windows.cmd",
+        f"{ROOT}/install/windows/uninstall-remote.cmd": "uninstall-windows.cmd",
         f"{ROOT}/install/peer/awgbv-peer.sh": "awgbv-peer.sh",
         f"{ROOT}/install/peer/install-peer.sh": "install-peer.sh",
         f"{ROOT}/install/relay/install-satellite.sh": "install-satellite.sh",
@@ -128,14 +129,21 @@ def main():
 
     # Windows-установщик проверяем на грабли batch (CRLF, BOM, ASCII, JSON-путь):
     # они ломают установку молча, а живой Windows под рукой есть не всегда.
-    cmd_asset = f"{STAGE}/install-windows.cmd"
-    if os.path.exists(cmd_asset):
+    for name in ("install-windows.cmd", "uninstall-windows.cmd"):
+        cmd_asset = f"{STAGE}/{name}"
+        if not os.path.exists(cmd_asset):
+            continue
         rc = subprocess.run([sys.executable, f"{ROOT}/scripts/check_windows_cmd.py", cmd_asset],
                             capture_output=True, text=True)
         tail = [ln for ln in rc.stdout.strip().splitlines() if "✗" in ln or "провалов" in ln]
         if rc.returncode != 0:
-            sys.exit("error: install-windows.cmd не прошёл проверку:\n" + "\n".join(tail))
-        print("  install-windows.cmd: проверка batch пройдена")
+            sys.exit(f"error: {name} не прошёл проверку:\n" + "\n".join(tail))
+        print(f"  {name}: проверка batch пройдена")
+
+    # оба бинаря для Windows обязательны: установщик выбирает по архитектуре
+    for want in ("awgbv-windows-amd64.exe", "awgbv-windows-arm64.exe"):
+        if not os.path.exists(f"{STAGE}/{want}"):
+            sys.exit(f"error: в площадке нет {want} — установщик на этой архитектуре не поставится")
 
     # Проверка, что версия в бинаре и в манифесте совпадает с релизной
     manifest = json.load(open(f"{ROOT}/extension/manifest.json"))

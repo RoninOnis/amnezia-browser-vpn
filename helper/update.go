@@ -156,7 +156,7 @@ func writeUpdateCache(info UpdateInfo) {
 
 // fetchRelease возвращает последний релиз как есть: нужны и теги, и список файлов.
 func fetchRelease() (releasePayload, error) {
-	client := &http.Client{Timeout: updateTimeout}
+	client := httpClient(updateTimeout)
 	req, err := http.NewRequest(http.MethodGet, releasesAPI, nil)
 	if err != nil {
 		return releasePayload{}, err

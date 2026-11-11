@@ -142,9 +142,9 @@ conf_params() {  # имя конфига
 conf_write() {  # stdin -> конфиг
   local conf="$1" tmp="$CONF_DIR/$1.tmp"
   if [ -n "$LOCAL_DIR" ]; then
-    cat > "$tmp" && cp "$CONF_DIR/$conf" "$CONF_DIR/$conf.bak" && mv "$tmp" "$CONF_DIR/$conf"
+    cat > "$tmp" && cp -f "$CONF_DIR/$conf" "$CONF_DIR/$conf.bak" && mv -f "$tmp" "$CONF_DIR/$conf"
   else
-    docker exec -i "$CTR" bash -c "cat > '$tmp' && cp '$CONF_DIR/$conf' '$CONF_DIR/$conf.bak' && mv '$tmp' '$CONF_DIR/$conf'"
+    docker exec -i "$CTR" bash -c "cat > '$tmp' && cp -f '$CONF_DIR/$conf' '$CONF_DIR/$conf.bak' && mv -f '$tmp' '$CONF_DIR/$conf'"
   fi
 }
 
@@ -160,8 +160,12 @@ apply_conf() {  # имя конфига
   return $rc
 }
 
+# Копию делаем КОПИРОВАНИЕМ (mv израсходовал бы единственный .bak), и с меткой
+# времени — чтобы после неудачного восстановления было из чего восстанавливаться.
 restore_conf() {  # имя конфига
-  in_ctr "mv -f '$CONF_DIR/$1.bak' '$CONF_DIR/$1'"
+  # cp, а не mv: после восстановления .bak должен оставаться на месте — иначе
+  # второй сбой уже нечем откатывать
+  in_ctr "cp -f '$CONF_DIR/$1.bak' '$CONF_DIR/$1'"
 }
 
 peer_present() {  # iface pubkey
@@ -174,14 +178,36 @@ peer_present() {  # iface pubkey
 
 meta_init() { in_ctr "test -f '$META_FILE' || : > '$META_FILE'"; }
 
-meta_set() {  # pubkey name
-  local pub="$1" safe
-  safe=$(printf '%s' "$2" | tr -d '\t\r\n' | cut -c1-40)
-  in_ctr "grep -v '^$pub' '$META_FILE' > '$META_FILE.tmp' 2>/dev/null || :; printf '%s\t%s\n' '$pub' '$safe' >> '$META_FILE.tmp'; mv '$META_FILE.tmp' '$META_FILE'"
+# Имя приходит от пользователя, а раньше подставлялось прямо в строку `bash -c`
+# в одинарных кавычках: имя вида  x'; id > /tmp/pwn; : '  выполняло команду от
+# root внутри контейнера (проверено). Теперь имя валидируется, а сами данные
+# уходят через stdin, а не в текст команды.
+# Возвращает безопасное имя (1-40 символов) или код 1 с пояснением в stderr.
+# НЕ вызывает die: внутри $( ) это вышло бы за пределы подоболочки, скрипт
+# продолжил бы работу с пустым именем — так и получилось в первой версии.
+check_name() {  # name
+  local name="$1"
+  case "$name" in
+    *"'"*|*'"'*|*'\\'*|*'$'*|*'`'*|*';'*|*'|'*|*'&'*|*'<'*|*'>'*|*'('*|*')'*)
+      log "ОШИБКА: в имени недопустимые символы (кавычки, слэш, ; | & $ \` < >)"
+      return 1 ;;
+  esac
+  if LC_ALL=C printf '%s' "$name" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+    log "ОШИБКА: в имени есть управляющие символы"
+    return 1
+  fi
+  printf '%s' "$name" | cut -c1-40
+}
+
+meta_set() {  # pubkey name (имя уже проверено в cmd_add)
+  local pub="$1" safe="${2:-client}"
+  [ -n "$safe" ] || safe="client"
+  # ключ проверен регуляркой выше по коду, имя — check_name; данные идут stdin
+  printf '%s\t%s\n' "$pub" "$safe" | in_ctr_stdin "grep -v -F -- '$pub' '$META_FILE' > '$META_FILE.tmp' 2>/dev/null || :; cat >> '$META_FILE.tmp'; mv '$META_FILE.tmp' '$META_FILE'"
 }
 
 meta_del() {  # pubkey
-  in_ctr "grep -v '^$1' '$META_FILE' > '$META_FILE.tmp' 2>/dev/null || :; mv '$META_FILE.tmp' '$META_FILE'"
+  in_ctr "grep -v -F -- '$1' '$META_FILE' > '$META_FILE.tmp' 2>/dev/null || :; mv '$META_FILE.tmp' '$META_FILE'"
 }
 
 meta_text() { in_ctr "cat '$META_FILE' 2>/dev/null || true"; }
@@ -217,8 +243,10 @@ peers_json() {  # conf
     }
     {
       if (count++) printf ","
-      printf "{\"publicKey\":\"%s\",\"presharedKey\":\"%s\",\"endpoint\":\"%s\",\"allowedIps\":\"%s\",\"lastHandshake\":%s,\"rx\":%s,\"tx\":%s,\"name\":\"%s\"}",
-        $1, $2, ($3=="(none)"?"":$3), $4, ($5+0), ($6+0), ($7+0), esc(name_of($1))
+      # presharedKey НЕ отдаём: для выдачи нового ключа нужен только PSK самого
+      # нового пира (он генерируется локально), а список уходит в браузер целиком
+      printf "{\"publicKey\":\"%s\",\"endpoint\":\"%s\",\"allowedIps\":\"%s\",\"lastHandshake\":%s,\"rx\":%s,\"tx\":%s,\"name\":\"%s\"}",
+        $1, ($3=="(none)"?"":$3), $4, ($5+0), ($6+0), ($7+0), esc(name_of($1))
     }
     END { printf "]}\n" }
   '
@@ -258,9 +286,12 @@ cmd_add() {
   # кавычки могли приехать как часть аргумента (sshd подставляет строку без
   # повторного разбора кавычек) — снимаем, чтобы формат не зависел от клиента
   pub="${pub#\'}"; pub="${pub%\'}"; psk="${psk#\'}"; psk="${psk%\'}"
+  name="${name#\'}"; name="${name%\'}"
+  # проверка ДО любых изменений: иначе невалидное имя всплывало уже после записи
+  # конфига, и пир оставался в интерфейсе без имени
+  name=$(check_name "$name") || exit 1
   [[ "$pub" =~ ^[A-Za-z0-9+/]{43}=$ ]] || die "некорректный публичный ключ"
   [[ "$psk" =~ ^[A-Za-z0-9+/]{43}=$ ]] || die "некорректный PSK"
-  name="${name#\'}"; name="${name%\'}"
   [ -n "$name" ] || name="client"
 
   local conf iface subnet base
@@ -302,8 +333,15 @@ cmd_add() {
     apply_conf "$conf" 2>/dev/null || true
     die "не удалось применить конфиг, изменения отменены"
   fi
-  meta_set "$pub" "$name"
-  printf '{"ok":true,"publicKey":"%s","allowedIps":"%s/32","name":"%s"}\n' "$pub" "$ip" "$name"
+  # Метаданные — до ответа «успех»: если имя не записалось, откатываем пира,
+  # иначе клиент видит ошибку, а пир остаётся в конфиге сиротой без имени.
+  if ! meta_set "$pub" "$name"; then
+    restore_conf "$conf"
+    apply_conf "$conf" 2>/dev/null || true
+    die "не удалось сохранить имя пира, добавление отменено"
+  fi
+  # имя возвращаем уже проверенное и обрезанное, а не то, что пришло
+  printf '{"ok":true,"publicKey":"%s","allowedIps":"%s/32","name":"%s"}\n' "$pub" "$ip" "$(printf '%s' "$name" | sed 's/["\\]/_/g')"
 }
 
 cmd_remove() {
@@ -357,14 +395,19 @@ cmd_remove() {
 # Разбираем БЕЗ eval: сначала строгая проверка формата целиком, и только потом
 # выдёргиваем известные поля по позициям. Строка приходит от клиента, поэтому
 # превращать её в код нельзя ни при каких условиях.
+# Результат разбора кладём в ГЛОБАЛЬНЫЙ массив: `set --` внутри функции меняет
+# только её собственные позиционные параметры, а не аргументы main (на этом
+# первая версия молча не работала — весь путь через SSH_ORIGINAL_COMMAND был мёртв).
+PARSED=()
 parse_ssh_command() {
   local cmd="$1" key='[A-Za-z0-9+/]{43}=' name=""
+  PARSED=()
   if [[ "$cmd" =~ ^(list|selftest)$ ]]; then
-    set -- "$cmd"
+    PARSED=("$cmd")
     return 0
   fi
   if [[ "$cmd" =~ ^remove\ --pubkey\ $key$ ]]; then
-    set -- remove --pubkey "$(awk '{print $3}' <<< "$cmd")"
+    PARSED=(remove --pubkey "$(awk '{print $3}' <<< "$cmd")")
     return 0
   fi
   if [[ "$cmd" =~ ^add\ --pubkey\ $key\ --psk\ $key(\ --name\ .{1,42})?$ ]]; then
@@ -372,20 +415,38 @@ parse_ssh_command() {
       name="${BASH_REMATCH[1]}"
       name="${name#\'}"; name="${name%\'}"
     fi
-    set -- add --pubkey "$(awk '{print $3}' <<< "$cmd")" \
-             --psk "$(awk '{print $5}' <<< "$cmd")" --name "$name"
+    PARSED=(add --pubkey "$(awk '{print $3}' <<< "$cmd")" \
+            --psk "$(awk '{print $5}' <<< "$cmd")" --name "$name")
     return 0
   fi
   die "недопустимая команда для этого ключа"
 }
 
+# Живой путь — argv из forced command; применяем к нему ту же строгую проверку
+# формата целиком, а не только по отдельным полям.
+check_argv_format() {  # все аргументы main
+  local key='[A-Za-z0-9+/]{43}='
+  local joined
+  joined=$(printf '%s ' "$@")
+  joined="${joined% }"
+  [[ "$joined" =~ ^(list|selftest)$ ]] && return 0
+  [[ "$joined" =~ ^remove\ --pubkey\ $key$ ]] && return 0
+  [[ "$joined" =~ ^add\ --pubkey\ $key\ --psk\ $key(\ --name\ .+)?$ ]] && return 0
+  die "недопустимая команда для этого ключа"
+}
+
 main() {
   need_root
+  # Путь 1: глагол пришёл аргументами (живой forced command).
+  # Путь 2: переменная окружения — только если argv пуст.
   if [ $# -eq 0 ] && [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
-    parse_ssh_command "$SSH_ORIGINAL_COMMAND"
+    parse_ssh_command "$SSH_ORIGINAL_COMMAND" || exit 1
+    set -- "${PARSED[@]}"
   fi
+  [ $# -gt 0 ] || die "глаголы: list | add --pubkey K --psk P [--name N] | remove --pubkey K | selftest"
+  check_argv_format "$@"
   local verb="${1:-}"
-  [ $# -gt 0 ] && shift
+  shift
   case "$verb" in
     list) cmd_list ;;
     add) cmd_add "$@" ;;

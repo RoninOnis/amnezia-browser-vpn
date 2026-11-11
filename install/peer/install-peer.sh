@@ -39,11 +39,22 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$(id -u)" = "0" ] || die "нужен root: sudo bash $0 ..."
-case "$PUBKEY" in
-  ssh-ed25519\ *|ssh-rsa\ *|ecdsa-sha2-nistp256\ *) ;;
-  "") log "предупреждение: публичный ключ не передан — authorized_keys не трогаю" ;;
-  *) die "некорректная строка публичного ключа (ожидался ssh-ed25519 AAAA...)" ;;
-esac
+# Строка ключа уходит в authorized_keys как есть, поэтому проверяем её ЦЕЛИКОМ:
+# раньше хватало проверки префикса, и аргумент с переводом строки добавлял второй,
+# НЕограниченный ключ (то есть снимал всю защиту forced command).
+if [ -n "$PUBKEY" ]; then
+  case "$PUBKEY" in
+    *$'\n'*|*$'\r'*) die "в строке ключа есть перевод строки — так можно добавить лишний ключ" ;;
+  esac
+  [[ "$PUBKEY" =~ ^(ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa)\ [A-Za-z0-9+/]+={0,3}(\ [^[:cntrl:]]{1,80})?$ ]] \
+    || die "некорректная строка публичного ключа (ожидался ssh-ed25519 AAAA... необязательный комментарий)"
+  if command -v ssh-keygen >/dev/null 2>&1; then
+    printf '%s\n' "$PUBKEY" | ssh-keygen -lf /dev/stdin >/dev/null 2>&1 \
+      || die "ssh-keygen не смог прочитать ключ — проверьте, что он скопирован целиком"
+  fi
+else
+  log "предупреждение: публичный ключ не передан — authorized_keys не трогаю"
+fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -53,14 +64,15 @@ if [ -z "$SCRIPT_SRC" ]; then
   curl -fsSL -o "$TMP/awgbv-peer.sh" "$BASE_URL/awgbv-peer.sh" || die "не удалось скачать awgbv-peer.sh"
   SCRIPT_SRC="$TMP/awgbv-peer.sh"
   # сверяем с SHA256SUMS из того же релиза, если он там есть
-  if curl -fsSL -o "$TMP/SHA256SUMS" "$BASE_URL/SHA256SUMS" 2>/dev/null; then
-    want=$(awk '$2 == "awgbv-peer.sh" {print $1}' "$TMP/SHA256SUMS")
-    if [ -n "$want" ]; then
-      got=$(sha256sum "$SCRIPT_SRC" | cut -d' ' -f1)
-      [ "$want" = "$got" ] || die "sha256 awgbv-peer.sh не совпал (ожидался $want, получен $got)"
-      log "→ sha256 совпал"
-    fi
-  fi
+  # Сверка обязательна: этот скрипт потом выполняется от root по sudo NOPASSWD.
+  # Раньше при отсутствии SHA256SUMS или строки в нём проверка молча пропускалась.
+  curl -fsSL -o "$TMP/SHA256SUMS" "$BASE_URL/SHA256SUMS" \
+    || die "не удалось скачать SHA256SUMS — без сверки скрипт не ставлю"
+  want=$(awk '$2 == "awgbv-peer.sh" {print $1}' "$TMP/SHA256SUMS")
+  [ -n "$want" ] || die "в SHA256SUMS нет строки awgbv-peer.sh — установка отменена, ничего не изменено"
+  got=$(sha256sum "$SCRIPT_SRC" | cut -d' ' -f1)
+  [ "$want" = "$got" ] || die "sha256 awgbv-peer.sh не совпал (ожидался $want, получен $got) — ничего не изменено"
+  log "→ sha256 совпал"
 fi
 [ -f "$SCRIPT_SRC" ] || die "нет файла скрипта: $SCRIPT_SRC"
 
@@ -129,12 +141,15 @@ if [ -n "$PUBKEY" ]; then
   # Глагол передаём аргументом: sshd раскрывает $SSH_ORIGINAL_COMMAND в своей оболочке
   # до запуска sudo, иначе sudo теряет переменную вместе с окружением.
   LINE="restrict,command=\"sudo $PEER_BIN \$SSH_ORIGINAL_COMMAND\" $PUBKEY"
-  if ! grep -qF "$PUBKEY" "$AUTH" 2>/dev/null; then
-    printf '%s\n' "$LINE" >> "$AUTH"
-    log "→ ключ добавлен в $AUTH"
-  else
-    log "→ такой ключ уже есть в $AUTH"
+  # Строку с этим ключом ПЕРЕЗАПИСЫВАЕМ: иначе после исправления формата forced
+  # command на сервере остаётся старая строка, и переустановка ничего не меняет.
+  BLOB=$(printf '%s' "$PUBKEY" | awk '{print $2}')
+  if grep -qF "$BLOB" "$AUTH" 2>/dev/null; then
+    grep -vF "$BLOB" "$AUTH" > "$AUTH.tmp" || true
+    mv "$AUTH.tmp" "$AUTH"
   fi
+  printf '%s\n' "$LINE" >> "$AUTH"
+  log "→ ключ записан в $AUTH"
   chown "$PEER_USER:$PEER_USER" "$AUTH"
   chmod 0600 "$AUTH"
 
