@@ -85,10 +85,18 @@ log "→ установлен $PEER_BIN"
 # --- 2. пользователь ---------------------------------------------------------
 if id "$PEER_USER" >/dev/null 2>&1; then
   log "→ пользователь $PEER_USER уже есть"
+  case "$(getent passwd "$PEER_USER" | cut -d: -f7)" in
+    */nologin|/bin/false) usermod -s /bin/sh "$PEER_USER"; log "→ оболочка исправлена на /bin/sh" ;;
+  esac
 else
-  useradd --system --no-create-home --home-dir /nonexistent \
-          --shell /usr/sbin/nologin "$PEER_USER" 2>/dev/null \
-    || useradd -r -M -d /nonexistent -s /usr/sbin/nologin "$PEER_USER"
+  # Домашний каталог = куда кладём ключ: sshd ищет authorized_keys по passwd,
+  # с домашним /nonexistent вход по ключу молча не работает.
+  # Оболочка — /bin/sh, НЕ nologin: sshd запускает forced command через шелл
+  # пользователя, и с nologin выход «This account is currently not available».
+  # Доступ запирает restrict,command= в authorized_keys, а не шелл.
+  useradd --system --no-create-home --home-dir /var/lib/awgbv \
+          --shell /bin/sh "$PEER_USER" 2>/dev/null \
+    || useradd -r -M -d /var/lib/awgbv -s /bin/sh "$PEER_USER"
   log "→ создан пользователь $PEER_USER"
 fi
 
@@ -96,6 +104,9 @@ fi
 # Разрешаем ровно одну команду и без пароля. Никакого ALL, никакого shell.
 cat > "$TMP/sudoers" <<SUDO
 # Управление пирами AmneziaWG из браузерного VPN. Только одна команда, без пароля.
+# env_keep нужен для SSH_ORIGINAL_COMMAND: sudo вычищает окружение, и без этого
+# forced command не видит, какой глагол запросил клиент.
+Defaults:$PEER_USER env_keep += "SSH_ORIGINAL_COMMAND"
 $PEER_USER ALL=(root) NOPASSWD: $PEER_BIN
 SUDO
 if command -v visudo >/dev/null 2>&1; then
@@ -107,11 +118,17 @@ log "→ установлен $SUDOERS"
 # --- 4. ключ -----------------------------------------------------------------
 if [ -n "$PUBKEY" ]; then
   HOME_DIR=$(getent passwd "$PEER_USER" | cut -d: -f6)
-  [ "$HOME_DIR" = "/nonexistent" ] && HOME_DIR="/var/lib/awgbv"
+  if [ "$HOME_DIR" = "/nonexistent" ] || [ -z "$HOME_DIR" ]; then
+    HOME_DIR="/var/lib/awgbv"
+    usermod -d "$HOME_DIR" "$PEER_USER"
+    log "→ домашний каталог $PEER_USER исправлен на $HOME_DIR"
+  fi
   install -d -m 0700 -o "$PEER_USER" -g "$PEER_USER" "$HOME_DIR" "$HOME_DIR/.ssh"
   AUTH="$HOME_DIR/.ssh/authorized_keys"
-  # restrict отключает всё лишнее (pty, forward, agent), command — запирает на один скрипт
-  LINE="restrict,command=\"sudo $PEER_BIN\" $PUBKEY"
+  # restrict отключает всё лишнее (pty, forward, agent), command — запирает на один скрипт.
+  # Глагол передаём аргументом: sshd раскрывает $SSH_ORIGINAL_COMMAND в своей оболочке
+  # до запуска sudo, иначе sudo теряет переменную вместе с окружением.
+  LINE="restrict,command=\"sudo $PEER_BIN \$SSH_ORIGINAL_COMMAND\" $PUBKEY"
   if ! grep -qF "$PUBKEY" "$AUTH" 2>/dev/null; then
     printf '%s\n' "$LINE" >> "$AUTH"
     log "→ ключ добавлен в $AUTH"

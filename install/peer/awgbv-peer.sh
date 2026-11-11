@@ -103,6 +103,9 @@ conf_subnet() {  # имя конфига
 
 conf_read() { in_ctr "cat '$CONF_DIR/$1'"; }
 
+# читает ЛЮБОЙ файл из каталога конфигов без обрезки хвоста (см. cmd_remove)
+conf_read_to() { in_ctr "cat '$CONF_DIR/$1'"; }
+
 # Публичный ключ сервера нужен клиенту для его конфига. Приватный не отдаём
 # никогда: он остаётся только на сервере.
 conf_public_key() {  # имя конфига
@@ -242,12 +245,22 @@ cmd_add() {
     case "$1" in
       --pubkey) pub="${2:-}"; shift 2 ;;
       --psk) psk="${2:-}"; shift 2 ;;
-      --name) name="${2:-}"; shift 2 ;;
+      --name)
+        # имя может прийти несколькими аргументами: sshd подставляет строку без
+        # повторного разбора кавычек, поэтому «Мой ноутбук» приезжает двумя словами
+        shift
+        name="$*"
+        set --
+        ;;
       *) die "неизвестный аргумент: $1" ;;
     esac
   done
+  # кавычки могли приехать как часть аргумента (sshd подставляет строку без
+  # повторного разбора кавычек) — снимаем, чтобы формат не зависел от клиента
+  pub="${pub#\'}"; pub="${pub%\'}"; psk="${psk#\'}"; psk="${psk%\'}"
   [[ "$pub" =~ ^[A-Za-z0-9+/]{43}=$ ]] || die "некорректный публичный ключ"
   [[ "$psk" =~ ^[A-Za-z0-9+/]{43}=$ ]] || die "некорректный PSK"
+  name="${name#\'}"; name="${name%\'}"
   [ -n "$name" ] || name="client"
 
   local conf iface subnet base
@@ -301,6 +314,7 @@ cmd_remove() {
       *) die "неизвестный аргумент: $1" ;;
     esac
   done
+  pub="${pub#\'}"; pub="${pub%\'}"
   [[ "$pub" =~ ^[A-Za-z0-9+/]{43}=$ ]] || die "некорректный публичный ключ"
 
   local conf iface filtered
@@ -309,17 +323,20 @@ cmd_remove() {
 
   in_ctr "grep -q '$pub' '$CONF_DIR/$conf'" || die "такого пира нет в конфиге"
 
-  # вырезаем блок [Peer] целиком, но только тот, где встречается нужный ключ;
-  # блок заканчивается строкой AllowedIPs, следующая [Peer] начинает новый
-  filtered=$(conf_read "$conf" | awk -v key="$pub" '
-    function flush() { if (block != "" && index(block, key) == 0) printf "%s", block; block = "" }
-    /^\[Peer\]/ { flush(); block = $0 "\n"; next }
-    /^\[Interface\]/ || /^\[/ { if (block != "") flush(); print; next }
-    { if (block != "") block = block $0 "\n"; else print }
+  # Вырезаем блок [Peer] целиком, но только тот, где встречается нужный ключ.
+  # Пишем результат в файл, а НЕ в $( ): подстановка команды срезает хвостовые
+  # переводы строк, и конфиг после отката оказывался на байт короче исходного.
+  local newf="$CONF_DIR/$conf.new"
+  in_ctr "awk -v key='$pub' '
+    function flush() { if (block != \"\" && index(block, key) == 0) printf \"%s\", block; block = \"\" }
+    /^\[Peer\]/ { flush(); block = \$0 \"\\n\"; next }
+    /^\[/ { if (block != \"\") flush(); print; next }
+    { if (block != \"\") block = block \$0 \"\\n\"; else print }
     END { flush() }
-  ')
+  ' '$CONF_DIR/$conf' > '$newf'"
 
-  printf '%s\n' "$filtered" | conf_write "$conf"
+  conf_read_to "$conf.new" | conf_write "$conf"
+  in_ctr "rm -f '$newf'"
   if ! apply_conf "$conf"; then
     restore_conf "$conf"
     apply_conf "$conf" || true
@@ -334,8 +351,39 @@ cmd_remove() {
   printf '{"ok":true,"publicKey":"%s","removed":true}\n' "$pub"
 }
 
+# Команда приходит от sshd в $SSH_ORIGINAL_COMMAND, а не в аргументах: forced
+# command запускается как `sh -c "sudo awgbv-peer"`.
+#
+# Разбираем БЕЗ eval: сначала строгая проверка формата целиком, и только потом
+# выдёргиваем известные поля по позициям. Строка приходит от клиента, поэтому
+# превращать её в код нельзя ни при каких условиях.
+parse_ssh_command() {
+  local cmd="$1" key='[A-Za-z0-9+/]{43}=' name=""
+  if [[ "$cmd" =~ ^(list|selftest)$ ]]; then
+    set -- "$cmd"
+    return 0
+  fi
+  if [[ "$cmd" =~ ^remove\ --pubkey\ $key$ ]]; then
+    set -- remove --pubkey "$(awk '{print $3}' <<< "$cmd")"
+    return 0
+  fi
+  if [[ "$cmd" =~ ^add\ --pubkey\ $key\ --psk\ $key(\ --name\ .{1,42})?$ ]]; then
+    if [[ "$cmd" =~ \ --name\ (.+)$ ]]; then
+      name="${BASH_REMATCH[1]}"
+      name="${name#\'}"; name="${name%\'}"
+    fi
+    set -- add --pubkey "$(awk '{print $3}' <<< "$cmd")" \
+             --psk "$(awk '{print $5}' <<< "$cmd")" --name "$name"
+    return 0
+  fi
+  die "недопустимая команда для этого ключа"
+}
+
 main() {
   need_root
+  if [ $# -eq 0 ] && [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
+    parse_ssh_command "$SSH_ORIGINAL_COMMAND"
+  fi
   local verb="${1:-}"
   [ $# -gt 0 ] && shift
   case "$verb" in

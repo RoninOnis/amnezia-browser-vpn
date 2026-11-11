@@ -118,8 +118,22 @@ func (p *PeerAdmin) Add(keys PeerKeys, name string) (*PeerInfo, error) {
 	if name == "" {
 		name = "клиент"
 	}
-	raw, err := p.runJSON("add", "--pubkey", shellQuote(keys.PublicKey),
-		"--psk", shellQuote(keys.Preshared), "--name", shellQuote(name))
+	// одинарная кавычка сломала бы формат команды, перевод строки — разбор
+	name = strings.Map(func(r rune) rune {
+		switch r {
+		case '\'', '"', '\n', '\r', '	', ';', '|', '&', '$', '`', '\\':
+			return '_'
+		}
+		return r
+	}, name)
+	if len([]rune(name)) > 40 {
+		name = string([]rune(name)[:40])
+	}
+	// Ключи идут без кавычек: это base64 без спецсимволов, а sshd подставляет
+	// строку в свою оболочку без повторного разбора кавычек — кавычки приехали бы
+	// в скрипт как часть аргумента. Имя, наоборот, кавычим: в нём бывают пробелы.
+	raw, err := p.runJSON("add", "--pubkey", keys.PublicKey,
+		"--psk", keys.Preshared, "--name", shellQuote(name))
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +154,7 @@ func (p *PeerAdmin) Add(keys PeerKeys, name string) (*PeerInfo, error) {
 
 // Remove отзывает пира по публичному ключу.
 func (p *PeerAdmin) Remove(publicKey string) error {
-	raw, err := p.runJSON("remove", "--pubkey", shellQuote(publicKey))
+	raw, err := p.runJSON("remove", "--pubkey", publicKey)
 	if err != nil {
 		return err
 	}
@@ -187,12 +201,31 @@ func BootstrapScript(peerScript, authorizedKeyLine string) string {
 	b.WriteString("rm -f \"$PEER_BIN.new\"\n\n")
 
 	b.WriteString("if ! id \"$PEER_USER\" >/dev/null 2>&1; then\n")
-	b.WriteString("  useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin \"$PEER_USER\" 2>/dev/null \\\n")
-	b.WriteString("    || useradd -r -M -d /nonexistent -s /usr/sbin/nologin \"$PEER_USER\"\n")
+	// Домашний каталог ОБЯЗАН совпадать с тем, куда кладём authorized_keys: sshd
+	// ищет ключ по passwd, и с домашним /nonexistent вход по ключу не работает
+	// (проверено живьём: бутстрап «успешен», а панель потом не может войти).
+	// Оболочка — обычный /bin/sh, НЕ nologin: sshd запускает forced command через
+	// шелл пользователя, и с nologin вход падает с «account is currently not
+	// available» уже ПОСЛЕ успешной аутентификации. Запирает доступ не шелл, а
+	// restrict,command= в authorized_keys: этим ключом можно выполнить только
+	// awgbv-peer, а без ключа войти нечем (пароля у пользователя нет).
+	b.WriteString("  useradd --system --no-create-home --home-dir \"$KEY_HOME\" --shell /bin/sh \"$PEER_USER\" 2>/dev/null \\\n")
+	b.WriteString("    || useradd -r -M -d \"$KEY_HOME\" -s /bin/sh \"$PEER_USER\"\n")
+	b.WriteString("else\n")
+	b.WriteString("  # уже созданный ранее пользователь мог остаться с /nonexistent или nologin\n")
+	b.WriteString("  if [ \"$(getent passwd \"$PEER_USER\" | cut -d: -f6)\" != \"$KEY_HOME\" ]; then\n")
+	b.WriteString("    usermod -d \"$KEY_HOME\" \"$PEER_USER\"\n")
+	b.WriteString("  fi\n")
+	b.WriteString("  case \"$(getent passwd \"$PEER_USER\" | cut -d: -f7)\" in\n")
+	b.WriteString("    */nologin|/bin/false) usermod -s /bin/sh \"$PEER_USER\" ;;\n")
+	b.WriteString("  esac\n")
 	b.WriteString("fi\n\n")
 
 	b.WriteString("cat > \"$SUDOERS\" <<'SUDO_EOF'\n")
 	b.WriteString("# Управление пирами AmneziaWG из браузерного VPN: ровно одна команда, без пароля.\n")
+	// sudo вычищает окружение, и без env_keep переменная SSH_ORIGINAL_COMMAND до
+	// скрипта не доходит: forced command получает «нет глагола» и панель не работает.
+	b.WriteString("Defaults:awgbv env_keep += \"SSH_ORIGINAL_COMMAND\"\n")
 	b.WriteString("awgbv ALL=(root) NOPASSWD: /usr/local/sbin/awgbv-peer\n")
 	b.WriteString("SUDO_EOF\n")
 	b.WriteString("chmod 0440 \"$SUDOERS\"\n")
@@ -202,9 +235,19 @@ func BootstrapScript(peerScript, authorizedKeyLine string) string {
 		b.WriteString("install -d -m 0700 -o \"$PEER_USER\" -g \"$PEER_USER\" \"$KEY_HOME\" \"$KEY_HOME/.ssh\"\n")
 		b.WriteString("AUTH=\"$KEY_HOME/.ssh/authorized_keys\"\n")
 		b.WriteString("touch \"$AUTH\"\n")
-		b.WriteString("if ! grep -qF " + shellQuote(strings.Fields(authorizedKeyLine)[1]) + " \"$AUTH\"; then\n")
-		b.WriteString("  printf '%s\\n' " + shellQuote("restrict,command=\"sudo "+"/usr/local/sbin/awgbv-peer"+"\" "+authorizedKeyLine) + " >> \"$AUTH\"\n")
+		// Глагол передаём АРГУМЕНТОМ в forced command: sshd выполняет строку своей
+		// оболочкой, поэтому $SSH_ORIGINAL_COMMAND раскрывается до запуска sudo, и
+		// sudo уже не может «потерять» её вместе с остальным окружением.
+		forced := `restrict,command="sudo /usr/local/sbin/awgbv-peer $SSH_ORIGINAL_COMMAND" ` + authorizedKeyLine
+		// Строку с нашим ключом ПЕРЕЗАПИСЫВАЕМ, а не пропускаем при наличии:
+		// иначе после исправления формата forced command на сервере остаётся
+		// старая строка, и обновление установщика ничего не меняет.
+		keyBlob := strings.Fields(authorizedKeyLine)[1]
+		b.WriteString("if grep -qF " + shellQuote(keyBlob) + " \"$AUTH\"; then\n")
+		b.WriteString("  grep -vF " + shellQuote(keyBlob) + " \"$AUTH\" > \"$AUTH.tmp\" || true\n")
+		b.WriteString("  mv \"$AUTH.tmp\" \"$AUTH\"\n")
 		b.WriteString("fi\n")
+		b.WriteString("printf '%s\\n' " + shellQuote(forced) + " >> \"$AUTH\"\n")
 		b.WriteString("chown \"$PEER_USER:$PEER_USER\" \"$AUTH\"\n")
 		b.WriteString("chmod 0600 \"$AUTH\"\n\n")
 	}

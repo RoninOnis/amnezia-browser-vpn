@@ -166,6 +166,17 @@ func PeerBootstrap(req BootstrapRequest) (map[string]any, error) {
 // опубликован. Скачивать его в момент бутстрапа честнее, чем вшивать в бинарь:
 // скрипт можно поправить без пересборки хелпера.
 func peerScriptSource() (string, error) {
+	// путь для разработки и живых проверок до того, как ассет попал в релиз
+	if local := os.Getenv("AWGBV_PEER_SCRIPT"); local != "" {
+		body, err := os.ReadFile(local)
+		if err != nil {
+			return "", fmt.Errorf("AWGBV_PEER_SCRIPT: %w", err)
+		}
+		if !bytes.Contains(body, []byte("awgbv-peer")) {
+			return "", errors.New("файл по AWGBV_PEER_SCRIPT не похож на awgbv-peer.sh")
+		}
+		return string(body), nil
+	}
 	release, err := fetchRelease()
 	if err != nil {
 		return "", err
