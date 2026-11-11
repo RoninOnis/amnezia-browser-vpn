@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Amnezia Browser VPN</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="popup">
+  <header class="row">
+    <div class="brand">
+      <img src="icons/icon.svg" alt="" width="20" height="20">
+      <span>Amnezia Browser VPN</span>
+    </div>
+    <label class="switch" title="Включить / выключить">
+      <input type="checkbox" id="toggle">
+      <span class="slider"></span>
+    </label>
+  </header>
+
+  <div id="status" class="status">загрузка…</div>
+
+  <section class="block">
+    <label class="lbl" for="profile">Подключение</label>
+    <select id="profile"></select>
+    <div class="hint" id="profileInfo"></div>
+  </section>
+
+  <section class="block">
+    <label class="lbl">Этот сайт</label>
+    <div class="site" id="siteHost">—</div>
+    <div class="seg" id="tabSeg">
+      <button data-value="auto" class="seg-btn">Авто</button>
+      <button data-value="tunnel" class="seg-btn">Через VPN</button>
+      <button data-value="direct" class="seg-btn">Напрямую</button>
+    </div>
+    <div class="hint" id="siteHint"></div>
+  </section>
+
+  <section class="block">
+    <label class="lbl">Списки и режим</label>
+    <div class="hint" id="listInfo">—</div>
+    <div class="row gap">
+      <button id="openOptions" class="btn">Настройки</button>
+      <button id="refresh" class="btn ghost">Обновить</button>
+    </div>
+  </section>
+
+  <div id="error" class="error hidden"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

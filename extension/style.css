@@ -1,0 +1,92 @@
+:root {
+  --bg: #14161a;
+  --panel: #1c1f26;
+  --line: #2b3039;
+  --fg: #e8eaed;
+  --muted: #9aa2ae;
+  --accent: #4a8cff;
+  --ok: #2e7d32;
+  --warn: #f9a825;
+  --err: #c62828;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 13px/1.45 -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+body.popup { width: 330px; padding: 12px; }
+body.options { max-width: 860px; margin: 0 auto; padding: 24px 18px 60px; }
+
+h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 14px; margin: 0 0 10px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+
+header.row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.row { display: flex; align-items: center; justify-content: space-between; }
+.row.gap { gap: 8px; justify-content: flex-start; }
+
+.status { padding: 8px 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); margin-bottom: 12px; }
+.status.ok { border-color: var(--ok); }
+.status.warn { border-color: var(--warn); }
+.status.err { border-color: var(--err); }
+
+.block { margin-bottom: 14px; }
+.lbl { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px; }
+.hint { color: var(--muted); font-size: 11px; margin-top: 5px; min-height: 14px; }
+.error { margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: #31151a; border: 1px solid var(--err); color: #ffb4ab; font-size: 12px; }
+.hidden { display: none; }
+
+select, input[type="text"], input[type="number"], textarea {
+  width: 100%;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 9px;
+  font: inherit;
+}
+textarea { min-height: 130px; resize: vertical; font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 12px; }
+input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+
+.btn {
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.danger { border-color: var(--err); color: #ffb4ab; }
+.btn.ghost { background: transparent; }
+.btn:disabled { opacity: .5; cursor: default; }
+
+.site { font-family: ui-monospace, Consolas, monospace; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; margin-bottom: 8px; overflow: hidden; text-overflow: ellipsis; }
+
+.seg { display: flex; gap: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg-btn { flex: 1; background: transparent; color: var(--muted); border: 0; padding: 7px 4px; font: inherit; cursor: pointer; }
+.seg-btn + .seg-btn { border-left: 1px solid var(--line); }
+.seg-btn.active { background: var(--accent); color: #fff; }
+
+.switch { position: relative; display: inline-block; width: 42px; height: 24px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; inset: 0; background: #3a4050; border-radius: 999px; transition: background .15s; cursor: pointer; }
+.slider::before { content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: transform .15s; }
+.switch input:checked + .slider { background: var(--ok); }
+.switch input:checked + .slider::before { transform: translateX(18px); }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+.profile-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.profile-row:last-child { border-bottom: 0; }
+.profile-row .name { flex: 1; }
+.profile-row .meta { color: var(--muted); font-size: 11px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+code { background: #0e1014; padding: 1px 5px; border-radius: 4px; font-size: 12px; }

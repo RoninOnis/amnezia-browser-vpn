@@ -1,0 +1,20 @@
+# build artifacts
+dist/
+bin/
+*.exe
+*.xpi
+
+# secrets / local configs — NEVER commit these
+*.link
+*.conf
+*.ovpn
+.env
+control.json
+helper.log
+*.log
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
+node_modules/
