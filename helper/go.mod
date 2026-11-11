@@ -5,11 +5,11 @@ go 1.25.0
 require (
 	github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20260828
 	github.com/things-go/go-socks5 v0.0.5
+	golang.org/x/crypto v0.42.0
 )
 
 require (
 	github.com/google/btree v1.1.3 // indirect
-	golang.org/x/crypto v0.42.0 // indirect
 	golang.org/x/net v0.44.0 // indirect
 	golang.org/x/sys v0.36.0 // indirect
 	golang.org/x/time v0.9.0 // indirect
