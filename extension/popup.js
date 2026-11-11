@@ -341,7 +341,10 @@ function renderUpdates() {
   const dl = $("#btnDownloadAddon");
   const upd = $("#btnUpdateHelper");
   if (upd) {
-    upd.hidden = !(u.helper && (u.helper.outdated || u.helper.missing));
+    // пока проверки версий не было, u === null: без защиты рендер падал на первом
+    // же вызове и «Настройки» не обновлялись до конца сессии
+    const helperPart = u && u.helper;
+    upd.hidden = !(helperPart && (helperPart.outdated || helperPart.missing));
     upd.disabled = !!(state && state.updatingHelper);
     upd.textContent = state && state.updatingHelper ? "Обновляю…" : "Обновить хелпер";
   }
@@ -374,51 +377,83 @@ function renderUpdates() {
   dl.hidden = !(u.addon && u.addon.outdated && u.pageUrl);
 }
 
+/* ---------------------------------------------------------------- Панель */
+
+// Форма первичной настройки: по умолчанию её видно только когда серверов ещё нет.
+// Кнопка «другой сервер» раскрывает форму принудительно — иначе при ошибке доступа
+// (сменился пароль, переехал адрес) исправить было бы нечем. showConnect — единственный
+// источник правды для этой видимости.
+let showConnect = false;
+
+// Подсказки панели: серый .hint — это справка, ошибки и предупреждения красятся.
+function setHint(selector, text, kind) {
+  const node = $(selector);
+  if (!node) return;
+  if (node.textContent !== text) node.textContent = text;
+  node.classList.toggle("err", kind === "err");
+  node.classList.toggle("warn", kind === "warn");
+}
+
+// Имя ключа для вопроса «Отозвать …?»: allowedIps бывает пустым (ключ выпущен без
+// адреса), и тогда в confirm оставался голый вопросительный знак.
+function peerLabel(peer) {
+  const key = String(peer.publicKey || "");
+  return peer.name || peer.allowedIps || (key ? key.slice(0, 8) : "") || "без имени";
+}
+
+const PANEL_BUTTONS = [
+  "#btnAdminConnect", "#btnAdminAnother", "#btnAdminRefresh", "#btnAdminCreate",
+  "#btnAdminCopy", "#btnAdminAdopt", "#btnSatPlan", "#btnSatInstall",
+];
+
+let shownKeyLink = ""; // какая ссылка уже показана: подсказку прошлой карточки не тащим
+
 function renderAdmin() {
   const s = state;
-  const hasServer = !!(s.servers && s.servers.length);
-  const showConnect = !hasServer || !s.peers;
-  $("#adminConnectCard").hidden = hasServer && !!s.peers && !s.peerError;
-  $("#adminPeersCard").hidden = !hasServer && !s.peers;
+  const servers = s.servers || [];
+  const hasServer = servers.length > 0;
+  // одна SSH-операция за раз: остальные кнопки панели ждут
+  const busy = !!(s.peerBusy || s.satelliteBusy);
+  const server = s.peerServer || (servers[0] && servers[0].host) || "";
 
-  const server = s.peerServer || (s.servers[0] && s.servers[0].host) || "";
+  // форма подключения — только когда серверов нет (или её раскрыли вручную)
+  $("#adminConnectCard").hidden = hasServer && !showConnect;
+  $("#adminPeersCard").hidden = !hasServer;
+
   $("#admServer").textContent = server || "—";
   const peers = s.peers;
-  $("#admContainer").textContent = peers && peers.container
-    ? `${peers.container} · ${peers.subnet || "?"}`
-    : "—";
+  const containerBits = [];
+  if (peers && peers.container) containerBits.push(peers.container);
+  if (peers && peers.listenPort) containerBits.push(`udp/${peers.listenPort}`);
+  else if (peers && peers.config) containerBits.push(peers.config);
+  $("#admContainer").textContent = containerBits.length ? containerBits.join(" · ") : "—";
+  $("#admSubnet").textContent = (peers && peers.subnet) || "—";
 
-  if (s.peerBusy) $("#admPeerHint").textContent = "Работаю… это может занять до минуты";
-  else if (s.peerError) $("#admPeerHint").textContent = s.peerError;
-  else if (peers) $("#admPeerHint").textContent = `Ключей на сервере: ${(peers.peers || []).length}`;
-  else $("#admPeerHint").textContent = "";
+  if (s.peerBusy) setHint("#admPeerHint", "Работаю… это может занять до минуты");
+  else if (s.peerError) setHint("#admPeerHint", s.peerError, "err");
+  else if (peers) setHint("#admPeerHint", `Ключей на сервере: ${(peers.peers || []).length}`);
+  else if (hasServer) setHint("#admPeerHint", "Загружаю ключи…");
+  else setHint("#admPeerHint", "");
 
   const box = $("#admPeers");
   box.textContent = "";
   for (const peer of (peers && peers.peers) || []) {
-    const item = document.createElement("div");
-    item.className = "site-row";
-    const left = document.createElement("div");
-    const title = document.createElement("div");
-    title.textContent = peer.name || "без имени";
-    const sub = document.createElement("div");
-    sub.className = "hint";
+    const item = el("div", "list-item");
+    const body = el("div", "peer-body");
+    body.appendChild(el("div", "peer-name", peer.name || "без имени"));
     const ago = peer.lastHandshake ? fmtAgo(peer.lastHandshake) : "не подключался";
-    sub.textContent = `${peer.allowedIps || "?"} · ${ago}`;
-    left.appendChild(title);
-    left.appendChild(sub);
-    item.appendChild(left);
-    const del = document.createElement("button");
-    del.className = "btn danger";
-    del.textContent = "Отозвать";
-    del.disabled = !!s.peerBusy;
+    body.appendChild(el("div", "peer-meta", `${peer.allowedIps || "адрес не задан"} · ${ago}`));
+    item.appendChild(body);
+    const del = el("button", "btn danger small", "Отозвать");
+    del.disabled = busy;
     del.addEventListener("click", async () => {
-      if (!confirm(`Отозвать ключ ${peer.allowedIps || ""}? Устройство потеряет доступ.`)) return;
+      if (!confirm(`Отозвать ключ «${peerLabel(peer)}»? Устройство потеряет доступ.`)) return;
       const res = await send("revokePeer", { publicKey: peer.publicKey });
       if (res && res.state) {
         state = res.state;
         render();
       }
+      if (res && !res.ok) setHint("#admPeerHint", "Не удалось: " + (res.error || "нет ответа"), "err");
     });
     item.appendChild(del);
     box.appendChild(item);
@@ -426,27 +461,65 @@ function renderAdmin() {
 
   const sat = s.satellite;
   const satOut = $("#satOutput");
-  if (sat && sat.output) {
-    satOut.hidden = false;
-    satOut.textContent = sat.output;
+  const outText = (sat && sat.output) || "";
+  // пишем только при изменении: иначе опрос каждые 4 секунды сбрасывал выделение
+  // и отбрасывал прокрутку вывода обратно наверх
+  if (satOut.textContent !== outText) satOut.textContent = outText;
+  satOut.hidden = !outText;
+
+  if (s.satelliteBusy) {
+    setHint("#satHint", "Работаю… установка может занять минуту");
+  } else if (sat && sat.dryRun && sat.finished) {
+    // порядок важен: хелпер ставит finished=true и для плана, поэтому dryRun
+    // проверяется первым — иначе «Проверить» рапортовало об установке службы
+    setHint("#satHint", "Проверка прошла: препятствий не найдено — можно устанавливать");
+  } else if (sat && sat.dryRun) {
+    setHint("#satHint", outText
+      ? "Проверка нашла проблему, подробности ниже. На сервере ничего не изменено."
+      : "Проверка не прошла, на сервере ничего не изменено.", "err");
+  } else if (sat && sat.finished) {
+    setHint("#satHint", sat.openFirewall
+      ? "Установщик завершился без ошибок: служба awgbv-satellite запущена, UDP/443 открыт в firewall."
+      : "Установщик завершился без ошибок: служба awgbv-satellite запущена. Firewall не менялся — UDP/443 нужно открыть самому, если он закрыт.",
+      sat.openFirewall ? "" : "warn");
+  } else if (sat) {
+    setHint("#satHint", outText
+      ? "Установщик сообщил о проблеме — подробности ниже."
+      : "Установщик сообщил о проблеме, текста нет. Смотрите лог службы на сервере.", "err");
   } else {
-    satOut.hidden = true;
-    satOut.textContent = "";
+    setHint("#satHint", "");
   }
-  if (s.satelliteBusy) $("#satHint").textContent = "Работаю… установка может занять минуту";
-  else if (sat && sat.finished) $("#satHint").textContent = "Готово: служба awgbv-satellite запущена";
-  else if (sat && sat.dryRun) $("#satHint").textContent = "Это только проверка — ничего не изменено";
-  else if (sat) $("#satHint").textContent = "Установщик сообщил о проблеме — подробности ниже";
-  else $("#satHint").textContent = "";
 
   const key = s.lastPeerKey;
   $("#adminKeyCard").hidden = !key;
+  const adopt = $("#btnAdminAdopt");
   if (key) {
     $("#admKeyName").textContent = key.name || "клиент";
     $("#admKeyIp").textContent = key.allowedIps || "—";
-    $("#admKeyLink").value = key.vpnLink || "";
+    const linkEl = $("#admKeyLink");
+    const link = key.vpnLink || "";
+    if (linkEl.value !== link) linkEl.value = link;
+    if (shownKeyLink !== link) {
+      shownKeyLink = link;
+      setHint("#admKeyHint", "");
+    }
+    // ключ уже добавлен в «Серверы» — второй раз добавлять нечего
+    adopt.hidden = !!key.adopted;
+  } else {
+    adopt.hidden = false;
+    shownKeyLink = "";
   }
-  void showConnect;
+
+  // адрес сервера известен: не заставляем вводить его заново
+  for (const sel of ["#admHost", "#satHost"]) {
+    const input = $(sel);
+    if (input && !input.value && server) input.value = server;
+  }
+
+  for (const sel of PANEL_BUTTONS) {
+    const btn = $(sel);
+    if (btn) btn.disabled = busy;
+  }
 }
 
 function render() {
@@ -514,16 +587,15 @@ for (const btn of $$("#siteSwitch button")) {
 $("#btnAddProfile").addEventListener("click", async () => {
   const link = $("#newLink").value.trim();
   if (!link) return;
-  const hint = $("#addHint");
-  hint.textContent = "разбираю…";
+  setHint("#addHint", "разбираю…");
   const res = await send("addProfile", { link });
   if (res && res.ok) {
-    hint.textContent = "добавлено";
+    setHint("#addHint", res.duplicate ? "такой ключ уже добавлен" : "добавлено");
     $("#newLink").value = "";
     await refresh();
     showScreen("servers");
   } else {
-    hint.textContent = "ошибка: " + ((res && res.error) || "?");
+    setHint("#addHint", "ошибка: " + ((res && res.error) || "?"), "err");
   }
 });
 
@@ -750,12 +822,16 @@ $("#btnAdminConnect").addEventListener("click", async () => {
   const host = $("#admHost").value.trim();
   const password = $("#admPassword").value;
   if (!host) {
-    $("#admConnectHint").textContent = "Укажите адрес сервера";
+    setHint("#admConnectHint", "Укажите адрес сервера", "err");
+    return;
+  }
+  if (!password) {
+    setHint("#admConnectHint", "Укажите пароль SSH — ключом панели первичную настройку не сделать", "err");
     return;
   }
   btn.disabled = true;
   btn.textContent = "Настраиваю…";
-  $("#admConnectHint").textContent = "Подключаюсь по SSH и ставлю ограниченный доступ…";
+  setHint("#admConnectHint", "Подключаюсь по SSH и ставлю ограниченный доступ…");
   try {
     const res = await send("bootstrapServer", {
       host,
@@ -763,19 +839,31 @@ $("#btnAdminConnect").addEventListener("click", async () => {
       user: $("#admUser").value.trim() || "root",
       password,
     });
+    // пароль не задерживаем в поле ни при успехе, ни при ошибке
     $("#admPassword").value = "";
     if (res && res.state) {
       state = res.state;
+      showConnect = false; // сервер настроен — форма снова спрятана
       render();
     }
-    $("#admConnectHint").textContent = res && res.ok
-      ? "Готово. Пароль больше не нужен и не сохранён."
-      : "Не удалось: " + ((res && res.error) || "нет ответа");
-    if (res && res.ok) await send("loadPeers", { host });
+    if (res && res.ok) {
+      setHint("#admConnectHint", "Готово. Пароль больше не нужен и не сохранён.");
+      await send("loadPeers", { host });
+    } else {
+      setHint("#admConnectHint", "Не удалось: " + ((res && res.error) || "нет ответа"), "err");
+    }
   } finally {
     btn.disabled = false;
     btn.textContent = "Подключить и настроить";
   }
+});
+
+// «другой сервер»: принудительно показываем форму первичной настройки, чтобы можно
+// было исправить адрес или пароль, когда сервер уже записан
+$("#btnAdminAnother").addEventListener("click", () => {
+  showConnect = true;
+  renderAdmin();
+  $("#admHost").focus();
 });
 
 $("#btnAdminRefresh").addEventListener("click", async () => {
@@ -784,6 +872,7 @@ $("#btnAdminRefresh").addEventListener("click", async () => {
     state = res.state;
     render();
   }
+  if (res && !res.ok) setHint("#admPeerHint", "Не удалось: " + (res.error || "нет ответа"), "err");
 });
 
 $("#btnAdminCreate").addEventListener("click", async () => {
@@ -798,7 +887,15 @@ $("#btnAdminCreate").addEventListener("click", async () => {
       state = res.state;
       render();
     }
-    if (res && !res.ok) $("#admPeerHint").textContent = "Не удалось: " + (res.error || "нет ответа");
+    if (res && !res.ok) {
+      setHint("#admPeerHint", "Не удалось: " + (res.error || "нет ответа"), "err");
+      return;
+    }
+    // при десятке ключей карточка результата уезжает ниже фолда — подкручиваем к ней
+    if (state && state.lastPeerKey) {
+      const card = $("#adminKeyCard");
+      if (card && card.scrollIntoView) card.scrollIntoView({ block: "nearest" });
+    }
   } finally {
     btn.disabled = false;
     btn.textContent = "Новый ключ";
@@ -809,9 +906,9 @@ $("#btnAdminCopy").addEventListener("click", async () => {
   const link = $("#admKeyLink").value;
   try {
     await navigator.clipboard.writeText(link);
-    $("#admKeyHint").textContent = "Ссылка скопирована";
+    setHint("#admKeyHint", "Ссылка скопирована");
   } catch (err) {
-    $("#admKeyHint").textContent = "Не удалось скопировать — выделите текст вручную";
+    setHint("#admKeyHint", "Не удалось скопировать — выделите текст вручную", "err");
   }
 });
 
@@ -821,19 +918,29 @@ $("#btnAdminAdopt").addEventListener("click", async () => {
     state = res.state;
     render();
   }
-  $("#admKeyHint").textContent = res && res.ok
-    ? "Ключ добавлен в «Серверы» — можно подключаться"
-    : "Не удалось: " + ((res && res.error) || "нет ответа");
+  if (res && res.ok) {
+    setHint("#admKeyHint", res.duplicate
+      ? "Этот ключ уже был в «Серверах» — второй раз не добавляю"
+      : "Ключ добавлен в «Серверы» — можно подключаться");
+  } else {
+    setHint("#admKeyHint", "Не удалось: " + ((res && res.error) || "нет ответа"), "err");
+  }
 });
 
 async function runSat(dryRun) {
   const host = $("#satHost").value.trim();
+  const password = $("#satPassword").value;
   if (!host) {
-    $("#satHint").textContent = "Укажите адрес сервера";
+    setHint("#satHint", "Укажите адрес сервера", "err");
+    return;
+  }
+  if (!password) {
+    setHint("#satHint", "Укажите пароль SSH: спутник ставится службой от root", "err");
     return;
   }
   const btn = dryRun ? $("#btnSatPlan") : $("#btnSatInstall");
   const label = btn.textContent;
+  const openFirewall = !dryRun && $("#satFirewall").checked;
   btn.disabled = true;
   btn.textContent = dryRun ? "Проверяю…" : "Устанавливаю…";
   try {
@@ -841,15 +948,20 @@ async function runSat(dryRun) {
       host,
       port: Number($("#satPort").value) || 22,
       user: $("#satUser").value.trim() || "root",
-      password: $("#satPassword").value,
-      openFirewall: false,
+      password,
+      openFirewall,
     });
     if (res && res.state) {
       state = res.state;
       render();
     }
-    if (!dryRun) $("#satPassword").value = "";
+    if (res && !res.ok && !(state && state.satellite && state.satellite.output)) {
+      const error = (res.satellite && res.satellite.output) || res.error || "нет ответа";
+      setHint("#satHint", (dryRun ? "Проверка не прошла: " : "Установщик завершился с ошибкой: ") + error, "err");
+    }
   } finally {
+    // пароль не остаётся в поле ни после проверки, ни после установки
+    $("#satPassword").value = "";
     btn.disabled = false;
     btn.textContent = label;
   }

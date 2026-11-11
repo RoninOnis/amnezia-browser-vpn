@@ -117,6 +117,10 @@ h2 {
 }
 
 .hint { margin: 6px 0 0; font-size: 11.5px; color: var(--text-quaternary); }
+/* ошибка и предупреждение читаются цветом, а не только текстом: серый мелкий шрифт
+   для «не удалось подключиться» выглядел как обычная справка */
+.hint.err { color: var(--err); }
+.hint.warn { color: var(--warn); }
 
 .card {
   background: var(--bg-surface);
@@ -125,6 +129,35 @@ h2 {
   padding: 12px;
   margin-bottom: 12px;
 }
+
+/* сворачиваемая карточка (<details>): по умолчанию закрыта, чтобы редкая операция
+   со спутником не занимала половину экрана */
+details.card.fold > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+details.card.fold > summary::-webkit-details-marker { display: none; }
+details.card.fold > summary::after {
+  content: "развернуть";
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: .04em;
+  text-transform: none;
+  color: var(--text-quaternary);
+}
+details.card.fold[open] > summary { margin-bottom: 10px; }
+details.card.fold[open] > summary::after { content: "свернуть"; }
+details.card.fold[open] > summary:hover,
+details.card.fold > summary:hover { color: var(--text-secondary); }
 
 .row { display: flex; align-items: center; gap: 8px; }
 .row.between { justify-content: space-between; }
@@ -221,7 +254,29 @@ label.field span.lbl {
   margin-bottom: 5px;
 }
 
-input[type="text"], input[type="number"], textarea, select {
+/* вертикальная группа полей с подписями (панель администратора) */
+.fields { display: flex; flex-direction: column; gap: 8px; }
+.fields.two { display: grid; grid-template-columns: 92px 1fr; gap: 8px; }
+
+/* чекбокс с подписью: «открыть UDP/443 в firewall» */
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.switch-row input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+
+input[type="text"], input[type="number"], input[type="password"], textarea, select {
   width: 100%;
   background: var(--bg-surface-alt);
   color: var(--text-primary);
@@ -289,6 +344,28 @@ textarea { min-height: 84px; resize: vertical; font-family: ui-monospace, Consol
 }
 
 .list-item .host { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+
+/* строки ключей на сервере: текст слева, кнопка «Отозвать» — на своей стороне,
+   а не переносится под текст */
+.list-item .peer-body { flex: 1 1 auto; min-width: 0; }
+.list-item .peer-name { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-item .peer-meta { font-size: 11px; color: var(--text-quaternary); margin-top: 2px; }
+.list-item > button.btn { flex: 0 0 auto; }
+
+/* вывод установщика спутника: моноширинный блок вместо инлайн-стилей */
+.console {
+  margin: 8px 0 0;
+  padding: 8px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-faint);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 170px;
+  overflow: auto;
+  font-size: 11px;
+}
 
 .icon-btn {
   border: 0;
@@ -367,7 +444,7 @@ textarea { min-height: 84px; resize: vertical; font-family: ui-monospace, Consol
   margin-bottom: 12px;
 }
 
-.kv { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; padding: 3px 0; }
+.kv { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; padding: 3px 0; }
 .kv .k { color: var(--text-quaternary); }
 
 /* ------------------------------------------- мастер установки хелпера */
