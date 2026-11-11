@@ -8,6 +8,12 @@ the normal connection.
 > (no TUN device, no root) and exposes a loopback SOCKS5 proxy; the extension decides per request
 > whether to use that proxy or go direct. AmneziaWG obfuscation (Jc/Jmin/Jmax, S1–S4, H1–H4, I1–I5)
 > is fully supported.
+>
+> Names and marks: "Amnezia" is used nominatively only, to state compatibility with `vpn://` profiles
+> created by the Amnezia app and with the AmneziaWG protocol. This project is independent — not
+> affiliated with, sponsored by, or endorsed by the amnezia-vpn team. The icon combines the Amnezia
+> mark (owned by the Amnezia project, sources under GPL-3.0) with the Firefox gradient; no rights to
+> the mark are claimed and we will remove or replace it on request.
 
 ---
 
@@ -229,10 +235,28 @@ node --test extension/tests/split.test.mjs          # логика списко�
 * **Ключи хранятся в `storage.local` расширения** в открытом виде — как и в десктопном клиенте
   Amnezia. Кому это важно, ставить расширение в отдельный профиль Firefox.
 
+## Название, знак и совместимость
+
+Проект независимый. Он не связан с Amnezia VPN, не аффилирован с командой
+[amnezia-vpn](https://github.com/amnezia-vpn), не спонсируется и не одобряется ею. Расширение
+написано с нуля; из чужого кода в нём — только библиотека
+[amneziawg-go](https://github.com/amnezia-vpn/amneziawg-go), подключаемая как обычная зависимость
+по её собственной лицензии (MIT), и знак для иконки (о нём ниже).
+
+Слово «Amnezia» в названии и описании стоит **исключительно как указание на совместимость**: этот
+инструмент работает с профилями `vpn://`, которые создаёт приложение Amnezia, и с протоколом
+AmneziaWG на вашем собственном сервере. Это не заявка на бренд и не попытка выдать проект за
+официальный клиент. Задача ровно обратная — чтобы те, у кого Amnezia уже есть, могли пользоваться
+своим сервером ещё и в браузере, не заворачивая в туннель всю систему.
+
+Иконка составная и читается буквально: **знак Amnezia** (принадлежит проекту Amnezia, исходники
+под GPL-3.0) в **градиенте Firefox** — «туннель Amnezia, но только для браузера». Прав на знак
+проект не заявляет. Если правообладатель захочет, чтобы мы перестали его использовать или
+заменили на нейтральный, — сделаем это по первому обращению, без переписки и споров:
+[issues](https://github.com/RoninOnis/amnezia-browser-vpn/issues).
+
 ## Лицензия
 
-MIT. Иконка — знак Amnezia из [amnezia-client](https://github.com/amnezia-vpn/amnezia-client)
-(GPL-3.0), перекрашенный; сам знак принадлежит проекту Amnezia.
-Использует [amneziawg-go](https://github.com/amnezia-vpn/amneziawg-go) (MIT),
+Код проекта — MIT. Использует [amneziawg-go](https://github.com/amnezia-vpn/amneziawg-go) (MIT),
 [netstack из wireguard-go](https://github.com/WireGuard/wireguard-go) (MIT) и
 [go-socks5](https://github.com/things-go/go-socks5) (MIT).
