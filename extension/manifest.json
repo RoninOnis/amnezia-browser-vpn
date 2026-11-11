@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Amnezia Browser VPN",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AmneziaWG только для браузера: туннель через локальный хелпер, белые и чёрные списки сайтов.",
   "browser_specific_settings": {
     "gecko": {
@@ -25,6 +25,9 @@
       "background.js"
     ]
   },
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "action": {
     "default_title": "Amnezia Browser VPN",
     "default_popup": "popup.html",

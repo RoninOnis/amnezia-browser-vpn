@@ -127,6 +127,16 @@ awgbv --stop
 python3 tests/e2e_nm.py dist/awgbv-linux-amd64 ./my.conf --expect-ip 203.0.113.10
 ```
 
+Проверка в реальном браузере (нужны Firefox Developer Edition + geckodriver, потому что
+release-сборка не грузит неподписанное расширение):
+
+```bash
+FF_BIN=/path/to/firefox GECKODRIVER=/path/to/geckodriver \
+python3 tests/browser_e2e.py ./my.conf --mode whitelist --whitelist ipinfo.io \
+  --expect-tunnel-url https://ipinfo.io/ip --expect-direct-url https://api.ipify.org
+# → ipinfo.io отвечает IP сервера, api.ipify.org — локальным IP
+```
+
 ## Тесты
 
 ```bash
@@ -144,6 +154,17 @@ node --test extension/tests/split.test.mjs          # логика списко�
 
 Демон слушает управляющий порт только на `127.0.0.1`, доступ — по одноразовому токену из
 `control.json` (права `0600`). SOCKS5 тоже только loopback.
+
+## Если что-то не работает
+
+| Симптом | Причина и лечение |
+|---|---|
+| В попапе «хелпер не найден» | Нет нативного манифеста или он указывает на несуществующий бинарь. Проверьте `~/.mozilla/native-messaging-hosts/awgbv.json` (Linux) / ключ `HKCU\Software\Mozilla\NativeMessagingHosts\awgbv` (Windows) и путь внутри. |
+| Туннель подключён, но IP не меняется | Расширению не выдан доступ «Access your data for all websites». Без host permissions фильтр `proxy.onRequest` не срабатывает **молча** — это документированное требование API. Проверьте `about:addons` → разрешения. |
+| Сайт попал в список, но идёт напрямую | Проверьте режим: в режиме чёрного списка запись означает «напрямую». Быстрая проверка — переключатель «Этот сайт» в попапе. |
+| `state: connecting` дольше ~10 c | Сервер не отвечает на handshake: проверьте UDP-порт в `vpn://` (не блокирует ли провайдер/файрвол), что сервер жив и ключ не отозван. |
+| Всё отвалилось после перезагрузки | Демон не поднялся: `awgbv --status`, затем `awgbv --connect <conf>`. При включённом автоподключении расширение поднимет туннель само при следующем тике (раз в минуту). |
+| Нужно посмотреть, что решило расширение | `about:debugging` → «Inspect» у расширения → консоль: каждое решение видно в `proxy.onError` и в статусах демона. Лог хелпера: `~/.local/state/awgbv/helper.log`. |
 
 ## Ограничения и как их закрывать
 
