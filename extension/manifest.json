@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Amnezia Browser VPN",
-  "version": "0.1.1",
-  "description": "AmneziaWG только для браузера: туннель через локальный хелпер, белые и чёрные списки сайтов.",
+  "version": "0.2.0",
+  "description": "AmneziaWG только для браузера: туннель через локальный хелпер, раздельное туннелирование по сайтам.",
   "browser_specific_settings": {
     "gecko": {
       "id": "awgbv@0xoni.ru",
@@ -32,18 +32,15 @@
     "default_title": "Amnezia Browser VPN",
     "default_popup": "popup.html",
     "default_icon": {
-      "16": "icons/icon.svg",
-      "32": "icons/icon.svg",
-      "48": "icons/icon.svg",
-      "96": "icons/icon.svg"
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "96": "icons/icon-96.png"
     }
   },
-  "options_ui": {
-    "page": "options.html",
-    "open_in_tab": true
-  },
   "icons": {
-    "48": "icons/icon.svg",
-    "96": "icons/icon.svg"
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png",
+    "128": "icons/icon-128.png"
   }
 }

@@ -114,11 +114,12 @@ function loadBackground(storage = {}) {
 
 const ev = (ctx, expr) => vm.runInContext(expr, ctx);
 
-// Prepare a deterministic runtime view: enabled, connected, given list mode.
-function configure(ctx, { mode = "blacklist", whitelist = [], blacklist = [], enabled = true, running = true, port = 1080 } = {}) {
+// Prepare a deterministic runtime view: enabled, connected, given lists.
+// Режим не задаётся — он выводится из списков (как в Amnezia).
+function configure(ctx, { whitelist = [], blacklist = [], enabled = true, running = true, port = 1080 } = {}) {
   ev(
     ctx,
-    `state.settings = { ...state.settings, enabled: ${enabled}, mode: ${JSON.stringify(mode)},
+    `state.settings = { ...state.settings, enabled: ${enabled},
        whitelist: ${JSON.stringify(whitelist)}, blacklist: ${JSON.stringify(blacklist)} };
      state.tunnel = { running: ${running}, state: ${JSON.stringify(running ? "connected" : "stopped")}, socksPort: ${running ? port : 0} };`
   );
@@ -157,51 +158,60 @@ test("domain matching handles subdomains and wildcards", () => {
   assert.equal(m("sub.example.net", [".example.net"]), true);
 });
 
-test("blacklist mode tunnels everything except listed hosts", () => {
+test("пустой список «Через VPN» = режим «всё кроме списка Напрямую»", () => {
   const ctx = loadBackground();
-  configure(ctx, { mode: "blacklist", blacklist: ["intranet.corp", "*.local"] });
+  configure(ctx, { blacklist: ["intranet.corp", "*.local"] });
+  assert.equal(ev(ctx, "effectiveMode()"), "blacklist");
   assert.equal(ev(ctx, 'useTunnelFor("example.com", 1)'), true);
   assert.equal(ev(ctx, 'useTunnelFor("intranet.corp", 1)'), false);
   assert.equal(ev(ctx, 'useTunnelFor("printer.local", 1)'), false);
 });
 
-test("whitelist mode tunnels only listed hosts", () => {
+test("непустой список «Через VPN» = режим «только список»", () => {
   const ctx = loadBackground();
-  configure(ctx, { mode: "whitelist", whitelist: ["whatismyip.example"] });
+  configure(ctx, { whitelist: ["whatismyip.example"] });
+  assert.equal(ev(ctx, "effectiveMode()"), "whitelist");
   assert.equal(ev(ctx, 'useTunnelFor("whatismyip.example", 1)'), true);
   assert.equal(ev(ctx, 'useTunnelFor("ru.wikipedia.org", 1)'), false);
 });
 
-test("loopback is never tunnelled", () => {
+test("«Напрямую» приоритетнее «Через VPN»", () => {
   const ctx = loadBackground();
-  configure(ctx, { mode: "whitelist", whitelist: ["localhost", "local", "127.0.0.1"] });
+  configure(ctx, { whitelist: ["example.com"], blacklist: ["secret.example.com"] });
+  assert.equal(ev(ctx, 'useTunnelFor("secret.example.com", 1)'), false);
+  assert.equal(ev(ctx, 'useTunnelFor("other.example.com", 1)'), true);
+});
+
+test("loopback никогда не идёт в туннель", () => {
+  const ctx = loadBackground();
+  configure(ctx, { whitelist: ["localhost", "local", "127.0.0.1"] });
   for (const host of ["localhost", "127.0.0.1", "::1", "router.local"]) {
     assert.equal(ev(ctx, `useTunnelFor(${JSON.stringify(host)}, 1)`), false, host);
   }
 });
 
-test("nothing is tunnelled while disabled or disconnected", () => {
+test("ничего не туннелируется, когда выключено или не подключено", () => {
   const ctx = loadBackground();
-  configure(ctx, { mode: "blacklist", blacklist: [], enabled: false });
+  configure(ctx, { enabled: false });
   assert.equal(ev(ctx, 'useTunnelFor("example.com", 1)'), false);
-  configure(ctx, { mode: "blacklist", blacklist: [], enabled: true, running: false });
+  configure(ctx, { enabled: true, running: false });
   assert.equal(ev(ctx, 'useTunnelFor("example.com", 1)'), false);
 });
 
-test("per-tab override wins over the lists", () => {
+test("переключатель вкладки важнее списков", () => {
   const ctx = loadBackground();
-  configure(ctx, { mode: "blacklist", blacklist: [] });
+  configure(ctx);
   ev(ctx, 'state.tabOverride.set(7, "direct")');
   assert.equal(ev(ctx, 'useTunnelFor("example.com", 7)'), false);
   assert.equal(ev(ctx, 'useTunnelFor("example.com", 8)'), true);
-  configure(ctx, { mode: "whitelist", whitelist: [] });
+  configure(ctx, { whitelist: [] });
   ev(ctx, 'state.tabOverride.set(8, "tunnel")');
   assert.equal(ev(ctx, 'useTunnelFor("example.com", 8)'), true);
 });
 
-test("proxy.onRequest returns SOCKS5 only for tunnelled hosts", () => {
+test("proxy.onRequest отдаёт SOCKS5 только для туннелируемых хостов", () => {
   const ctx = loadBackground();
-  configure(ctx, { mode: "whitelist", whitelist: ["tunnel.example"], port: 45678 });
+  configure(ctx, { whitelist: ["tunnel.example"], port: 45678 });
   const viaProxy = ev(
     ctx,
     'browser.__listeners[0]({ url: "https://tunnel.example/p", host: "tunnel.example", tabId: 3 })'

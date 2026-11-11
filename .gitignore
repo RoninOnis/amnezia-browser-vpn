@@ -3,6 +3,8 @@ dist/
 bin/
 *.exe
 *.xpi
+# web-ext oставляет служебный файл после подписи — в репозитории ему не место
+.amo-upload-uuid
 
 # secrets / local configs — NEVER commit these
 *.link

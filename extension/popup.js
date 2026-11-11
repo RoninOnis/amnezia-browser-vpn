@@ -1,18 +1,30 @@
-const $ = (sel) => document.querySelector(sel);
+/* Amnezia Browser VPN — интерфейс попапа.
+ *
+ * Один экран-приложение: четыре раздела (Главная / Серверы / Сайты / Настройки),
+ * нижняя навигация, палитра из AmneziaStyle.qml.
+ */
 
-let currentState = null;
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+let state = null;
 let currentTabId = null;
 let currentHost = "";
+let activeList = "whitelist"; // какой список открыт на экране «Сайты»
+let currentScreen = "home";
+
+/* ------------------------------------------------------------- утилиты */
 
 function fmtBytes(n) {
-  if (!n) return "0 B";
-  const units = ["B", "КБ", "МБ", "ГБ"];
+  if (!n) return "0 Б";
+  const units = ["Б", "КБ", "МБ", "ГБ"];
   let i = 0;
-  while (n >= 1024 && i < units.length - 1) {
-    n /= 1024;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
     i++;
   }
-  return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
+  return `${v.toFixed(i ? 1 : 0)} ${units[i]}`;
 }
 
 function fmtUptime(sec) {
@@ -23,12 +35,12 @@ function fmtUptime(sec) {
   return h ? `${h}ч ${m}м` : m ? `${m}м ${s}с` : `${s}с`;
 }
 
-function stateLabel(t) {
-  if (!t) return { text: "нет данных", cls: "" };
-  if (t.state === "connected") return { text: "подключено", cls: "ok" };
-  if (t.state === "connecting") return { text: "подключение…", cls: "warn" };
-  if (t.state === "error") return { text: "ошибка: " + (t.error || "?"), cls: "err" };
-  return { text: "отключено", cls: "" };
+function fmtAgo(unix) {
+  if (!unix) return "не было";
+  const diff = Math.max(0, Math.floor(Date.now() / 1000 - unix));
+  if (diff < 60) return `${diff} с назад`;
+  if (diff < 3600) return `${Math.floor(diff / 60)} мин назад`;
+  return `${Math.floor(diff / 3600)} ч назад`;
 }
 
 async function send(cmd, extra = {}) {
@@ -39,81 +51,381 @@ async function send(cmd, extra = {}) {
   }
 }
 
-function render() {
-  const s = currentState;
-  if (!s) return;
-  $("#toggle").checked = !!s.enabled;
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+}
 
+/* --------------------------------------------------------- состояние UI */
+
+function tunnelBadge(t) {
+  if (!t || !t.running) return { text: "отключено", cls: "" };
+  if (t.state === "connected") return { text: "подключено", cls: "ok" };
+  if (t.state === "connecting") return { text: "подключение…", cls: "warn" };
+  if (t.state === "error") return { text: "ошибка", cls: "err" };
+  return { text: t.state || "—", cls: "" };
+}
+
+function effectiveMode(s) {
+  return (s.whitelist && s.whitelist.length) ? "whitelist" : "blacklist";
+}
+
+/* ------------------------------------------------------------- рендер */
+
+function renderTop() {
+  const s = state;
+  const badge = $("#topBadge");
+  const b = tunnelBadge(s.tunnel);
+  badge.className = "badge " + b.cls;
+  badge.textContent = s.enabled ? b.text : "выкл";
+}
+
+function renderHome() {
+  const s = state;
   const t = s.tunnel || {};
-  const label = stateLabel(t);
-  const status = $("#status");
-  status.className = "status " + label.cls;
-  const parts = [label.text];
-  if (t.running && t.socksPort) parts.push(`SOCKS5 127.0.0.1:${t.socksPort}`);
-  if (t.running && t.uptimeSec) parts.push(`аптайм ${fmtUptime(t.uptimeSec)}`);
-  if (t.running) parts.push(`↓${fmtBytes(t.rxBytes)} ↑${fmtBytes(t.txBytes)}`);
-  status.textContent = parts.join(" · ");
+  const connected = s.enabled && t.state === "connected";
+  // две версии знака: цветная (активно) и серая (покой), см. icons/hero-on|off.png
+  $("#heroImg").src = connected ? "icons/hero-on.png" : "icons/hero-off.png";
+  const btn = $("#heroBtn");
+  btn.className = "hero-btn";
+  if (s.enabled && t.state === "connected") btn.classList.add("on");
+  else if (s.enabled && t.state === "connecting") btn.classList.add("busy");
+  else if (t.state === "error" || (s.enabled && !t.running)) btn.classList.add("error");
 
-  // profiles
-  const sel = $("#profile");
-  const prev = sel.value;
-  sel.innerHTML = "";
-  if (!s.profiles.length) {
-    const opt = document.createElement("option");
-    opt.value = "";
-    opt.textContent = "— добавьте vpn:// ссылку в настройках —";
-    sel.appendChild(opt);
-    sel.disabled = true;
+  const label = $("#heroLabel");
+  if (!s.enabled) {
+    label.textContent = "Отключено";
+  } else if (t.state === "connected") {
+    label.textContent = "Защищено";
+  } else if (t.state === "connecting") {
+    label.textContent = "Подключение…";
+  } else if (t.state === "error") {
+    label.textContent = "Ошибка";
   } else {
-    sel.disabled = false;
-    for (const p of s.profiles) {
-      const opt = document.createElement("option");
-      opt.value = p.id;
-      opt.textContent = p.name || p.endpoint;
-      if (p.id === s.activeProfileId) opt.selected = true;
-      sel.appendChild(opt);
-    }
-    if (prev && s.profiles.some((p) => p.id === prev)) sel.value = prev;
+    label.textContent = "Не подключено";
   }
-  $("#profileInfo").textContent = s.activeProfile
-    ? `${s.activeProfile.endpoint}${t.lastHandshakeUnix ? " · handshake " + new Date(t.lastHandshakeUnix * 1000).toLocaleTimeString() : ""}`
-    : "профиль не выбран";
 
-  // lists summary
-  const mode = s.mode === "whitelist" ? "белый список (в VPN только перечисленное)" : "чёрный список (в VPN всё, кроме перечисленного)";
-  $("#listInfo").textContent = `${mode} · белых: ${s.whitelist.length}, чёрных: ${s.blacklist.length}`;
+  const sub = $("#heroSub");
+  if (s.enabled && t.socksPort) sub.textContent = `SOCKS5 127.0.0.1:${t.socksPort}`;
+  else if (s.enabled) sub.textContent = "хелпер не отвечает";
+  else sub.textContent = "нажмите, чтобы подключиться";
 
-  // current site
-  $("#siteHost").textContent = currentHost || "—";
+  $("#statRx").textContent = t.running ? fmtBytes(t.rxBytes) : "—";
+  $("#statTx").textContent = t.running ? fmtBytes(t.txBytes) : "—";
+  $("#statUp").textContent = t.running ? fmtUptime(t.uptimeSec) : "—";
 
-  // per-tab override
-  send("listTabOverrides").then((res) => {
-    const overrides = new Map(res && res.overrides ? res.overrides : []);
-    const cur = overrides.get(currentTabId) || "auto";
-    for (const btn of document.querySelectorAll("#tabSeg .seg-btn")) {
-      btn.classList.toggle("active", btn.dataset.value === cur);
-    }
-  });
+  const line = $("#serverLine");
+  const meta = $("#serverMeta");
+  if (s.activeProfile) {
+    line.textContent = s.activeProfile.name || s.activeProfile.endpoint;
+    const bits = [s.activeProfile.endpoint];
+    if (t.lastHandshakeUnix) bits.push("handshake " + fmtAgo(t.lastHandshakeUnix));
+    else if (t.running) bits.push("handshake: не было");
+    meta.textContent = bits.join(" · ");
+  } else {
+    line.textContent = "не выбран";
+    meta.textContent = "добавьте ключ vpn:// на вкладке «Серверы»";
+  }
+  $("#btnReconnect").disabled = !s.activeProfile;
 
-  const err = $("#error");
+  // алерт
+  const alertBox = $("#alertBox");
   if (s.lastError) {
-    err.textContent = s.lastError;
-    err.classList.remove("hidden");
+    alertBox.textContent = s.lastError;
+    alertBox.classList.remove("hidden");
   } else if (!s.profiles.length) {
-    err.textContent = "Хелпер установлен? Добавьте профиль (vpn://) в настройках.";
-    err.classList.remove("hidden");
+    alertBox.textContent = "Профиля нет: на вкладке «Серверы» вставьте ссылку vpn:// из приложения Amnezia.";
+    alertBox.classList.remove("hidden");
   } else {
-    err.classList.add("hidden");
+    alertBox.classList.add("hidden");
   }
+
+  // «этот сайт»
+  $("#siteHost").textContent = currentHost || "—";
+  $("#siteHint").textContent = currentHost
+    ? (() => {
+        const inWl = s.whitelist.includes(currentHost);
+        const inBl = s.blacklist.includes(currentHost);
+        if (inWl) return "сайт в списке «Через VPN»";
+        if (inBl) return "сайт в списке «Напрямую»";
+        return effectiveMode(s) === "whitelist"
+          ? "по общим правилам: этот сайт идёт напрямую"
+          : "по общим правилам: этот сайт идёт через VPN";
+      })()
+    : "эта страница не подходит для правила";
+}
+
+function renderServers() {
+  const s = state;
+  const box = $("#serverList");
+  box.innerHTML = "";
+  if (!s.profiles.length) {
+    box.appendChild(el("p", "hint", "Пока ни одного подключения."));
+    return;
+  }
+  for (const p of s.profiles) {
+    const card = el("div", "server" + (p.id === s.activeProfileId ? " selected" : ""));
+    card.appendChild(el("div", "dot"));
+    const body = el("div", "body");
+    body.appendChild(el("div", "name", p.name || p.endpoint));
+    const metaBits = [p.endpoint, p.clientIp, p.container].filter(Boolean);
+    body.appendChild(el("div", "meta", metaBits.join(" · ")));
+    card.appendChild(body);
+    if (p.id === s.activeProfileId) card.appendChild(el("span", "badge accent", "активен"));
+    const del = el("button", "icon-btn", "×");
+    del.title = "Удалить профиль";
+    del.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      if (!confirm(`Удалить профиль «${p.name || p.endpoint}»?`)) return;
+      await send("removeProfile", { id: p.id });
+      await refresh();
+    });
+    card.appendChild(del);
+    card.addEventListener("click", async () => {
+      if (p.id === state.activeProfileId) return;
+      await send("selectProfile", { id: p.id });
+      await refresh();
+    });
+    box.appendChild(card);
+  }
+}
+
+function renderSites() {
+  const s = state;
+  const list = activeList === "whitelist" ? s.whitelist : s.blacklist;
+
+  $("#cntWl").textContent = s.whitelist.length;
+  $("#cntBl").textContent = s.blacklist.length;
+  for (const b of $$("#sitesTabs button")) {
+    b.classList.toggle("active", b.dataset.list === activeList);
+  }
+
+  const mode = effectiveMode(s);
+  const badge = $("#modeBadge");
+  badge.textContent = mode === "whitelist" ? "режим: только список" : "режим: всё кроме списка";
+  badge.className = "badge " + (mode === "whitelist" ? "accent" : "");
+
+  $("#sitesHint").textContent = activeList === "whitelist"
+    ? "Только сайты из этого списка пойдут через VPN. Пока список пуст — через VPN идёт всё, кроме «Напрямую»."
+    : "Эти адреса всегда идут напрямую, мимо туннеля. Приоритет выше, чем у списка «Через VPN».";
+
+  const box = $("#sitesList");
+  box.innerHTML = "";
+  if (!list.length) {
+    box.appendChild(el("p", "hint", "Список пуст."));
+  } else {
+    for (const host of list) {
+      const item = el("div", "list-item");
+      item.appendChild(el("span", "host mono", host));
+      const del = el("button", "icon-btn", "×");
+      del.title = "Удалить";
+      del.addEventListener("click", async () => {
+        const next = list.filter((h) => h !== host);
+        await send("saveLists", activeList === "whitelist" ? { whitelist: next } : { blacklist: next });
+        await refresh();
+      });
+      item.appendChild(del);
+      box.appendChild(item);
+    }
+  }
+}
+
+function renderSettings() {
+  const s = state;
+  const t = s.tunnel || {};
+  $("#autoConnect").checked = !!s.autoConnect;
+  $("#listenPort").value = s.listenPort || 0;
+  $("#hState").textContent = t.running ? (t.state || "—") : "остановлен";
+  $("#hVersion").textContent = s.helperVersion || "—";
+  $("#hSocks").textContent = t.socksPort ? `127.0.0.1:${t.socksPort}` : "—";
+  $("#xVersion").textContent = browser.runtime.getManifest().version;
+}
+
+function render() {
+  if (!state) return;
+  renderTop();
+  renderHome();
+  renderServers();
+  renderSites();
+  renderSettings();
 }
 
 async function refresh() {
   const res = await send("refresh");
   if (res && res.state) {
-    currentState = res.state;
+    state = res.state;
     render();
   }
 }
+
+/* ------------------------------------------------------------ навигация */
+
+function showScreen(name) {
+  currentScreen = name;
+  for (const section of $$(".screen")) {
+    section.classList.toggle("active", section.id === `screen-${name}`);
+  }
+  for (const btn of $$("#tabbar button")) {
+    btn.classList.toggle("active", btn.dataset.screen === name);
+  }
+  $("#screens").scrollTop = 0;
+}
+
+for (const btn of $$("#tabbar button")) {
+  btn.addEventListener("click", () => showScreen(btn.dataset.screen));
+}
+
+/* --------------------------------------------------------------- Главная */
+
+$("#heroBtn").addEventListener("click", async () => {
+  const res = await send("setEnabled", { value: !state.enabled });
+  if (res && res.ok === false && res.error) {
+    $("#alertBox").textContent = res.error;
+    $("#alertBox").classList.remove("hidden");
+  }
+  await refresh();
+});
+
+$("#btnReconnect").addEventListener("click", async () => {
+  await send("disconnect");
+  await send("setEnabled", { value: true });
+  await refresh();
+});
+
+for (const btn of $$("#siteSwitch button")) {
+  btn.addEventListener("click", async () => {
+    if (!currentTabId) return;
+    await send("tabOverride", { tabId: currentTabId, value: btn.dataset.value });
+    for (const b of $$("#siteSwitch button")) b.classList.toggle("active", b === btn);
+  });
+}
+
+/* --------------------------------------------------------------- Серверы */
+
+$("#btnAddProfile").addEventListener("click", async () => {
+  const link = $("#newLink").value.trim();
+  if (!link) return;
+  const hint = $("#addHint");
+  hint.textContent = "разбираю…";
+  const res = await send("addProfile", { link });
+  if (res && res.ok) {
+    hint.textContent = "добавлено";
+    $("#newLink").value = "";
+    await refresh();
+    showScreen("servers");
+  } else {
+    hint.textContent = "ошибка: " + ((res && res.error) || "?");
+  }
+});
+
+/* ----------------------------------------------------------------- Сайты */
+
+for (const btn of $$("#sitesTabs button")) {
+  btn.addEventListener("click", () => {
+    activeList = btn.dataset.list;
+    $("#sitesBulk").value = "";
+    renderSites();
+  });
+}
+
+function normalizeHost(raw) {
+  let h = String(raw || "").trim().toLowerCase();
+  if (!h) return "";
+  h = h.replace(/^https?:\/\//, "").replace(/^\/\//, "");
+  h = h.split("/")[0].split("?")[0].split("#")[0];
+  h = h.split("@").pop();
+  if (h.startsWith("*.")) return h; // wildcard оставляем как есть
+  h = h.split(":")[0];
+  return h.replace(/\.$/, "");
+}
+
+async function addSite(raw) {
+  const host = normalizeHost(raw);
+  if (!host) return false;
+  const s = state;
+  const other = activeList === "whitelist" ? s.blacklist : s.whitelist;
+  if (other.includes(host)) {
+    // один и тот же адрес в двух списках — убираем из противоположного
+    await send("saveLists", activeList === "whitelist"
+      ? { blacklist: other.filter((h) => h !== host) }
+      : { whitelist: other.filter((h) => h !== host) });
+    await refresh();
+  }
+  const list = activeList === "whitelist" ? state.whitelist : state.blacklist;
+  if (list.includes(host)) return false;
+  const next = [...list, host];
+  await send("saveLists", activeList === "whitelist" ? { whitelist: next } : { blacklist: next });
+  await refresh();
+  return true;
+}
+
+$("#btnAddSite").addEventListener("click", async () => {
+  const input = $("#siteInput");
+  const ok = await addSite(input.value);
+  if (ok) input.value = "";
+  input.focus();
+});
+
+$("#siteInput").addEventListener("keydown", async (ev) => {
+  if (ev.key === "Enter") {
+    ev.preventDefault();
+    const input = $("#siteInput");
+    const ok = await addSite(input.value);
+    if (ok) input.value = "";
+  }
+});
+
+$("#btnSaveBulk").addEventListener("click", async () => {
+  const hosts = $("#sitesBulk").value
+    .split(/[\r\n,;]+/)
+    .map(normalizeHost)
+    .filter(Boolean);
+  const uniq = Array.from(new Set(hosts));
+  await send("saveLists", activeList === "whitelist" ? { whitelist: uniq } : { blacklist: uniq });
+  $("#bulkHint").textContent = `сохранено: ${uniq.length}`;
+  $("#sitesBulk").value = "";
+  await refresh();
+});
+
+$("#btnClearList").addEventListener("click", async () => {
+  if (!confirm("Очистить этот список?")) return;
+  await send("saveLists", activeList === "whitelist" ? { whitelist: [] } : { blacklist: [] });
+  await refresh();
+});
+
+/* ------------------------------------------------------------- Настройки */
+
+$("#btnSavePrefs").addEventListener("click", async () => {
+  const res = await send("savePrefs", {
+    autoConnect: $("#autoConnect").checked,
+    listenPort: Number($("#listenPort").value) || 0,
+  });
+  $("#prefsHint").textContent = res && res.ok ? "сохранено" : "ошибка: " + ((res && res.error) || "?");
+  await refresh();
+});
+
+$("#btnRestart").addEventListener("click", async () => {
+  await send("disconnect");
+  await send("setEnabled", { value: state.enabled });
+  await refresh();
+});
+
+$("#btnQuit").addEventListener("click", async () => {
+  if (!confirm("Остановить хелпер? Туннель закроется, расширение останется.")) return;
+  await send("quitHelper");
+  await refresh();
+});
+
+/* -------------------------------------------------------------- запуск */
+
+browser.runtime.onMessage.addListener((msg) => {
+  if (msg && msg.type === "state" && msg.payload) {
+    state = msg.payload;
+    render();
+  }
+});
 
 async function init() {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
@@ -127,41 +439,17 @@ async function init() {
   }
   const res = await send("getState");
   if (res && res.state) {
-    currentState = res.state;
+    state = res.state;
     render();
   }
+  const overrides = await send("listTabOverrides");
+  const map = new Map(overrides && overrides.overrides ? overrides.overrides : []);
+  const cur = map.get(currentTabId) || "auto";
+  for (const b of $$("#siteSwitch button")) b.classList.toggle("active", b.dataset.value === cur);
+
+  showScreen("home");
   refresh();
+  setInterval(refresh, 4000);
 }
-
-$("#toggle").addEventListener("change", async (ev) => {
-  const res = await send("setEnabled", { value: ev.target.checked });
-  if (res && res.ok === false && res.error) {
-    $("#error").textContent = res.error;
-    $("#error").classList.remove("hidden");
-  }
-  await refresh();
-});
-
-$("#profile").addEventListener("change", async (ev) => {
-  await send("selectProfile", { id: ev.target.value });
-  await refresh();
-});
-
-for (const btn of document.querySelectorAll("#tabSeg .seg-btn")) {
-  btn.addEventListener("click", async () => {
-    await send("tabOverride", { tabId: currentTabId, value: btn.dataset.value });
-    for (const b of document.querySelectorAll("#tabSeg .seg-btn")) b.classList.toggle("active", b === btn);
-  });
-}
-
-$("#openOptions").addEventListener("click", () => browser.runtime.openOptionsPage());
-$("#refresh").addEventListener("click", refresh);
-
-browser.runtime.onMessage.addListener((msg) => {
-  if (msg && msg.type === "state" && msg.payload) {
-    currentState = msg.payload;
-    render();
-  }
-});
 
 init();

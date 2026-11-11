@@ -9,7 +9,7 @@
 #   DRY_RUN=1 only print what would be done
 set -euo pipefail
 
-VERSION="${VERSION:-v0.1.1}"
+VERSION="${VERSION:-latest}"
 REPO="${REPO:-RoninOnis/amnezia-browser-vpn}"
 HOST_NAME="awgbv"
 EXT_ID="awgbv@0xoni.ru"
@@ -52,7 +52,11 @@ case "$(uname -m)" in
 esac
 
 ASSET="awgbv-linux-$ARCH"
-BASE="https://github.com/$REPO/releases/download/$VERSION"
+if [[ "$VERSION" == "latest" ]]; then
+  BASE="https://github.com/$REPO/releases/latest/download"
+else
+  BASE="https://github.com/$REPO/releases/download/$VERSION"
+fi
 
 echo "→ платформа: linux/$ARCH, версия $VERSION"
 TMP="$(mktemp -d)"

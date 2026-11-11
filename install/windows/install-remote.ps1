@@ -9,7 +9,7 @@
 #   -Binary <path>    use a local exe instead of downloading
 
 param(
-  [string]$Version = "v0.1.1",
+  [string]$Version = "latest",
   [string]$Binary = ""
 )
 
@@ -21,7 +21,8 @@ $ExtId     = "awgbv@0xoni.ru"
 $TargetDir = Join-Path $env:LOCALAPPDATA "AwgBrowserVpn"
 $TargetExe = Join-Path $TargetDir "awgbv.exe"
 $Manifest  = Join-Path $TargetDir "awgbv.json"
-$Base      = "https://github.com/$Repo/releases/download/$Version"
+$Base      = if ($Version -eq "latest") { "https://github.com/$Repo/releases/latest/download" }
+             else { "https://github.com/$Repo/releases/download/$Version" }
 
 New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
 

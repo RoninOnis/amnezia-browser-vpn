@@ -16,7 +16,8 @@ const LOOPBACK = /^(localhost|127\.\d+\.\d+\.\d+|::1|\[::1\]|.*\.local|.*\.local
 const DEFAULTS = {
   enabled: false,
   autoConnect: false,
-  mode: "blacklist", // blacklist: всё в VPN, кроме списка | whitelist: только список
+  // Списки как в Amnezia: «Через VPN» и «Напрямую». Отдельного переключателя режима
+  // нет — режим выводится из того, пуст ли список «Через VPN» (см. effectiveMode).
   whitelist: [],
   blacklist: [],
   profiles: [],
@@ -27,6 +28,7 @@ const DEFAULTS = {
 const state = {
   settings: { ...DEFAULTS },
   tunnel: { running: false, state: "stopped", socksPort: 0, error: "" },
+  helperVersion: "",
   tabOverride: new Map(), // tabId -> "auto" | "tunnel" | "direct"
   nativePort: null,
   nativeSeq: 0,
@@ -153,6 +155,13 @@ function matchesAny(host, list) {
   return false;
 }
 
+// Режим выводится из списков, как в Amnezia: непустой список «Через VPN» делает
+// поведение белым списком, пустой — чёрным.
+function effectiveMode(settings) {
+  const s = settings || state.settings;
+  return (s.whitelist && s.whitelist.length) ? "whitelist" : "blacklist";
+}
+
 function useTunnelFor(host, tabId) {
   const s = state.settings;
   if (!s.enabled || !state.tunnel.running || !state.tunnel.socksPort) return false;
@@ -160,8 +169,10 @@ function useTunnelFor(host, tabId) {
   const override = state.tabOverride.get(tabId);
   if (override === "direct") return false;
   if (override === "tunnel") return true;
-  const listed = s.mode === "whitelist" ? matchesAny(host, s.whitelist) : matchesAny(host, s.blacklist);
-  return s.mode === "whitelist" ? listed : !listed;
+  // «Напрямую» всегда имеет приоритет над «Через VPN»
+  if (matchesAny(host, s.blacklist)) return false;
+  if (s.whitelist.length) return matchesAny(host, s.whitelist);
+  return true;
 }
 
 function socksInfo() {
@@ -225,7 +236,8 @@ function publicState() {
   return {
     enabled: !!s.enabled,
     autoConnect: !!s.autoConnect,
-    mode: s.mode,
+    mode: effectiveMode(s), // выводится из списков, отдельного переключателя нет
+    helperVersion: state.helperVersion,
     whitelist: s.whitelist,
     blacklist: s.blacklist,
     profiles: s.profiles.map((p) => ({
@@ -302,6 +314,10 @@ async function setEnabled(value) {
 
 async function refreshStatus() {
   const resp = await sendNative("status", {}, 10000);
+  if (!state.helperVersion) {
+    const ver = await sendNative("version", {}, 8000);
+    if (ver && ver.ok && ver.version) state.helperVersion = ver.version;
+  }
   if (resp.ok && resp.status) {
     applyTunnelStatus(resp.status);
   } else if (!resp.ok) {
@@ -370,10 +386,18 @@ browser.runtime.onMessage.addListener((msg) => {
       return refreshStatus().then((s) => ({ ok: true, state: s }));
     case "saveLists":
       return saveSettings({
-        mode: msg.mode || state.settings.mode,
         whitelist: Array.isArray(msg.whitelist) ? msg.whitelist : state.settings.whitelist,
         blacklist: Array.isArray(msg.blacklist) ? msg.blacklist : state.settings.blacklist,
       }).then(() => ({ ok: true }));
+    case "quitHelper": {
+      return sendNative("quit", {}, 10000).then((resp) => {
+        state.tunnel = { ...state.tunnel, running: false, state: "stopped", socksPort: 0 };
+        state.helperVersion = "";
+        updateBadge();
+        notifyUI();
+        return resp;
+      });
+    }
     case "savePrefs":
       return saveSettings({
         autoConnect: msg.autoConnect != null ? !!msg.autoConnect : state.settings.autoConnect,
