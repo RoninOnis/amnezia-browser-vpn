@@ -268,11 +268,12 @@ cmd_list() {
 }
 
 cmd_add() {
-  local pub="" psk="" name=""
+  local pub="" psk="" name="" ip_req=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --pubkey) pub="${2:-}"; shift 2 ;;
       --psk) psk="${2:-}"; shift 2 ;;
+      --ip) ip_req="${2:-}"; shift 2 ;;
       --name)
         # имя может прийти несколькими аргументами: sshd подставляет строку без
         # повторного разбора кавычек, поэтому «Мой ноутбук» приезжает двумя словами
@@ -305,15 +306,34 @@ cmd_add() {
     die "пир с таким ключом уже есть в конфиге"
   fi
 
-  # свободный адрес: берём занятые AllowedIPs и ищем первый пропуск
-  local used ip n
-  used=$(in_ctr "grep -E '^AllowedIPs' '$CONF_DIR/$conf' | cut -d= -f2 | tr -d ' ' | cut -d/ -f1")
-  ip=""
-  for n in $(seq 2 254); do
-    if ! printf '%s\n' "$used" | grep -qx "$base.$n"; then
-      ip="$base.$n"; break
+  # Явный адрес (--ip) нужен для восстановления пира на его прежний адрес: клиент
+  # на устройстве настроен на конкретный client_ip, и выдача другого адреса его
+  # ломает. Проверяем, что адрес внутри своей подсети и не занят.
+  if [ -n "$ip_req" ]; then
+    case "$ip_req" in
+      "$base."[0-9]*)
+        [[ "$ip_req" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] \
+          || die "--ip должен быть адресом вида 10.8.1.15" ;;
+      *) die "--ip $ip_req вне подсети $subnet" ;;
+    esac
+    if in_ctr "$tool_name show '$iface' dump | awk '{print \$4}' | grep -qx '$ip_req/32'"; then
+      die "адрес $ip_req уже занят другим пиром"
     fi
-  done
+  fi
+
+  local used ip n
+  ip=""
+  if [ -n "$ip_req" ]; then
+    ip="$ip_req"
+  else
+    # свободный адрес: берём занятые AllowedIPs и ищем первый пропуск
+    used=$(in_ctr "grep -E '^AllowedIPs' '$CONF_DIR/$conf' | cut -d= -f2 | tr -d ' ' | cut -d/ -f1")
+    for n in $(seq 2 254); do
+      if ! printf '%s\n' "$used" | grep -qx "$base.$n"; then
+        ip="$base.$n"; break
+      fi
+    done
+  fi
   [ -n "$ip" ] || die "в подсети $subnet нет свободных адресов"
 
   {
@@ -410,13 +430,17 @@ parse_ssh_command() {
     PARSED=(remove --pubkey "$(awk '{print $3}' <<< "$cmd")")
     return 0
   fi
-  if [[ "$cmd" =~ ^add\ --pubkey\ $key\ --psk\ $key(\ --name\ .{1,42})?$ ]]; then
+  if [[ "$cmd" =~ ^add\ --pubkey\ $key\ --psk\ $key(\ --ip\ [0-9.]+)?(\ --name\ .{1,42})?$ ]]; then
     if [[ "$cmd" =~ \ --name\ (.+)$ ]]; then
       name="${BASH_REMATCH[1]}"
       name="${name#\'}"; name="${name%\'}"
     fi
+    local iparg=()
+    if [[ "$cmd" =~ \ --ip\ ([0-9.]+) ]]; then
+      iparg=(--ip "${BASH_REMATCH[1]}")
+    fi
     PARSED=(add --pubkey "$(awk '{print $3}' <<< "$cmd")" \
-            --psk "$(awk '{print $5}' <<< "$cmd")" --name "$name")
+            --psk "$(awk '{print $5}' <<< "$cmd")" "${iparg[@]}" --name "$name")
     return 0
   fi
   die "недопустимая команда для этого ключа"
@@ -431,7 +455,7 @@ check_argv_format() {  # все аргументы main
   joined="${joined% }"
   [[ "$joined" =~ ^(list|selftest)$ ]] && return 0
   [[ "$joined" =~ ^remove\ --pubkey\ $key$ ]] && return 0
-  [[ "$joined" =~ ^add\ --pubkey\ $key\ --psk\ $key(\ --name\ .+)?$ ]] && return 0
+  [[ "$joined" =~ ^add\ --pubkey\ $key\ --psk\ $key(\ --ip\ [0-9.]+)?(\ --name\ .+)?$ ]] && return 0
   die "недопустимая команда для этого ключа"
 }
 
