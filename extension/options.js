@@ -37,8 +37,12 @@ function renderProfiles(s) {
 
     const name = document.createElement("div");
     name.className = "name";
-    name.innerHTML = `<div>${escapeHtml(p.name || p.endpoint)}</div>
-      <div class="meta">${escapeHtml(p.endpoint)} · ${escapeHtml(p.clientIp || "")} ${p.container ? "· " + escapeHtml(p.container) : ""}</div>`;
+    const title = document.createElement("div");
+    title.textContent = p.name || p.endpoint;
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = [p.endpoint, p.clientIp || "", p.container || ""].filter(Boolean).join(" · ");
+    name.append(title, meta);
 
     const del = document.createElement("button");
     del.className = "btn danger";
@@ -52,12 +56,6 @@ function renderProfiles(s) {
     row.append(radio, name, del);
     box.appendChild(row);
   }
-}
-
-function escapeHtml(str) {
-  return String(str == null ? "" : str).replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  }[c]));
 }
 
 function renderStatus(s) {
