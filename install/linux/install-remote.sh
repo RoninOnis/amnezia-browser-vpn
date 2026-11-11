@@ -18,7 +18,7 @@ BIN_DST="$BIN_DIR/$HOST_NAME"
 
 case "$(uname -s)" in
   Linux) ;;
-  *) echo "error: this script is for Linux (use install-windows.ps1 on Windows)" >&2; exit 1 ;;
+  *) echo "error: this script is for Linux (on Windows use install-windows.cmd)" >&2; exit 1 ;;
 esac
 
 if [[ "${EUID}" -eq 0 && -n "${SUDO_USER:-}" ]]; then

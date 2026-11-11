@@ -305,6 +305,30 @@ func TestTOFURejectsChangedHostKey(t *testing.T) {
 	_ = second
 }
 
+// Отказ серверного скрипта должен доходить чистым текстом: «Process exited with
+// status 1» в интерфейсе ничего не объясняет.
+func TestSSHServerRefusalIsHumanReadable(t *testing.T) {
+	isolatedHome(t)
+	srv := newFakeSSH(t, func(cmd string) (string, string, bool) {
+		return "", "ОШИБКА: такого пира нет в конфиге", false
+	})
+	admin, err := NewPeerAdmin(SSHConfig{Addr: srv.addr(), User: "awgbv", Password: "секрет"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	err = admin.Remove("PUB=")
+	if err == nil {
+		t.Fatal("отказ сервера должен возвращаться как ошибка")
+	}
+	if got := err.Error(); got != "такого пира нет в конфиге" {
+		t.Fatalf("текст ошибки не причёсан: %q", got)
+	}
+	if strings.Contains(err.Error(), "Process exited") {
+		t.Fatal("внутренности ssh просочились в текст для пользователя")
+	}
+}
+
 func TestSSHWrongPasswordExplained(t *testing.T) {
 	isolatedHome(t)
 	srv := newFakeSSH(t, func(cmd string) (string, string, bool) { return "{}", "", true })

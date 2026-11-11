@@ -216,11 +216,18 @@ func (c *SSHClient) RunStdout(cmd string) (string, error) {
 	session.Stdout = &out
 	session.Stderr = &errb
 	if err := session.Run(cmd); err != nil {
+		// Пользователю нужна причина, а не «Process exited with status 1»:
+		// серверный скрипт печатает человеческий текст, его и отдаём.
 		msg := strings.TrimSpace(errb.String())
 		if msg == "" {
 			msg = strings.TrimSpace(out.String())
 		}
-		return out.String(), fmt.Errorf("команда завершилась ошибкой (%v): %s", err, firstLines(msg, 3))
+		msg = strings.TrimPrefix(msg, "ОШИБКА: ")
+		msg = strings.TrimPrefix(msg, "ОШИБКА:")
+		if msg == "" {
+			return out.String(), fmt.Errorf("команда завершилась с ошибкой (%v)", err)
+		}
+		return out.String(), errors.New(firstLines(msg, 3))
 	}
 	return out.String(), nil
 }

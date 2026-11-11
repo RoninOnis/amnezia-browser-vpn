@@ -126,6 +126,17 @@ def main():
     for w in warn:
         print("! " + w)
 
+    # Windows-установщик проверяем на грабли batch (CRLF, BOM, ASCII, JSON-путь):
+    # они ломают установку молча, а живой Windows под рукой есть не всегда.
+    cmd_asset = f"{STAGE}/install-windows.cmd"
+    if os.path.exists(cmd_asset):
+        rc = subprocess.run([sys.executable, f"{ROOT}/scripts/check_windows_cmd.py", cmd_asset],
+                            capture_output=True, text=True)
+        tail = [ln for ln in rc.stdout.strip().splitlines() if "✗" in ln or "провалов" in ln]
+        if rc.returncode != 0:
+            sys.exit("error: install-windows.cmd не прошёл проверку:\n" + "\n".join(tail))
+        print("  install-windows.cmd: проверка batch пройдена")
+
     # Проверка, что версия в бинаре и в манифесте совпадает с релизной
     manifest = json.load(open(f"{ROOT}/extension/manifest.json"))
     if manifest.get("version") != args.version:
