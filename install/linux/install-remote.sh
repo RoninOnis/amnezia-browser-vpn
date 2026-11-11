@@ -21,6 +21,30 @@ case "$(uname -s)" in
   *) echo "error: this script is for Linux (use install-windows.ps1 on Windows)" >&2; exit 1 ;;
 esac
 
+if [[ "${EUID}" -eq 0 && -n "${SUDO_USER:-}" ]]; then
+  cat >&2 <<'EOF'
+error: скрипт запущен через sudo.
+
+Native messaging — per-user штука: манифест должен лежать в домашнем каталоге
+того, от чьего имени работает Firefox. Через sudo он попадёт в /root и Firefox
+его не увидит (симптом: "No such native application awgbv").
+
+Запустите БЕЗ sudo:
+    bash install-linux.sh
+
+Сначала уберите то, что уже установилось в /root:
+    sudo rm -f /root/.local/bin/awgbv \
+               /root/.mozilla/native-messaging-hosts/awgbv.json \
+               /root/snap/firefox/common/.mozilla/native-messaging-hosts/awgbv.json
+EOF
+  exit 1
+fi
+if [[ "${EUID}" -eq 0 && "${FORCE_ROOT:-0}" != "1" ]]; then
+  echo "warning: вы root — манифест попадёт в ${HOME}. Если это не то, что нужно, прервите (Ctrl+C)." >&2
+  echo "         продолжить всё равно: FORCE_ROOT=1 bash install-linux.sh" >&2
+  exit 1
+fi
+
 case "$(uname -m)" in
   x86_64|amd64) ARCH=amd64 ;;
   aarch64|arm64) ARCH=arm64 ;;
@@ -54,6 +78,12 @@ if [[ "${DRY_RUN:-0}" == "1" ]]; then
   exit 0
 fi
 
+SNAP_HOME="$HOME/snap/firefox/common"
+if [[ -d "$HOME/snap/firefox" ]]; then
+  # Snap-confined Firefox can only execute what it sees inside its own home.
+  BIN_DST="$SNAP_HOME/bin/$HOST_NAME"
+  BIN_DIR="$SNAP_HOME/bin"
+fi
 mkdir -p "$BIN_DIR"
 install -m 0755 "$TMP/$ASSET" "$BIN_DST"
 echo "→ бинарь: $BIN_DST ($("$BIN_DST" --version 2>/dev/null || echo '?'))"
@@ -73,10 +103,14 @@ EOF
   echo "→ манифест: $dir/$HOST_NAME.json"
 }
 
-write_manifest "$HOME/.mozilla/native-messaging-hosts"
 if [[ -d "$HOME/snap/firefox" ]]; then
-  write_manifest "$HOME/snap/firefox/common/.mozilla/native-messaging-hosts"
-  echo "  (snap Firefox обнаружен — манифест продублирован внутрь песочницы)"
+  # snap build: manifest and binary both live inside the snap's home, otherwise
+  # Firefox reports "No such native application".
+  write_manifest "$SNAP_HOME/.mozilla/native-messaging-hosts"
+  write_manifest "$HOME/.mozilla/native-messaging-hosts"
+  echo "  (snap Firefox: бинарь и манифест внутри песочницы, копия манифеста — в ~/.mozilla)"
+else
+  write_manifest "$HOME/.mozilla/native-messaging-hosts"
 fi
 
 echo
@@ -85,7 +119,7 @@ echo "  1) установить подписанный .xpi: about:addons → ш
 echo "  2) в настройках расширения вставить ключ vpn:// из приложения Amnezia"
 echo
 echo "Проверка без браузера:"
-echo "  $BIN_DST --status"
-echo "  $BIN_DST --connect /путь/к/config.conf --listen 127.0.0.1:1081"
+echo "  \"$BIN_DST\" --status"
+echo "  \"$BIN_DST\" --connect /путь/к/config.conf --listen 127.0.0.1:1081"
 echo "  curl --socks5-hostname 127.0.0.1:1081 https://api.ipify.org"
 echo "  $BIN_DST --stop"

@@ -12,6 +12,30 @@ set -euo pipefail
 EXT_ID="awgbv@0xoni.ru"
 HOST_NAME="awgbv"
 
+if [[ "${EUID}" -eq 0 && -n "${SUDO_USER:-}" ]]; then
+  cat >&2 <<'EOF'
+error: скрипт запущен через sudo.
+
+Native messaging — per-user штука: манифест должен лежать в домашнем каталоге
+того, от чьего имени работает Firefox. Через sudo он попадёт в /root и Firefox
+его не увидит (симптом: "No such native application awgbv").
+
+Запустите БЕЗ sudo:
+    bash install-linux.sh
+
+Сначала уберите то, что уже установилось в /root:
+    sudo rm -f /root/.local/bin/awgbv \
+               /root/.mozilla/native-messaging-hosts/awgbv.json \
+               /root/snap/firefox/common/.mozilla/native-messaging-hosts/awgbv.json
+EOF
+  exit 1
+fi
+if [[ "${EUID}" -eq 0 && "${FORCE_ROOT:-0}" != "1" ]]; then
+  echo "warning: вы root — манифест попадёт в ${HOME}. Если это не то, что нужно, прервите (Ctrl+C)." >&2
+  echo "         продолжить всё равно: FORCE_ROOT=1 bash install-linux.sh" >&2
+  exit 1
+fi
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case "$(uname -m)" in
   x86_64|amd64) ARCH=amd64 ;;
