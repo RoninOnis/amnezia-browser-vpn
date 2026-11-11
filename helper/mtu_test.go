@@ -19,7 +19,9 @@ func pairs(attempts []PortMtuAttempt) [][2]int {
 // сдаться и перезапустить подключение раньше.
 func TestAttemptPlanFallbackRightAfterProfilePort(t *testing.T) {
 	got := pairs(AttemptPlan(37689, 1376, true, true))
-	want := [][2]int{{37689, 1376}, {443, 1376}, {37689, 1280}, {443, 1280}}
+	// 443 идёт вторым и уже с урезанным MTU: там в тракте почти всегда чужой VPN.
+	// Четвёртой попытки (443/1200) нет: MTU 1280 для 443 уже проверен вторым шагом.
+	want := [][2]int{{37689, 1376}, {443, 1280}, {37689, 1280}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("AttemptPlan = %v, want %v", got, want)
 	}
@@ -30,6 +32,9 @@ func TestAttemptPlanFallbackRightAfterProfilePort(t *testing.T) {
 func TestAttemptPlanFallbackWithoutLadder(t *testing.T) {
 	got := pairs(AttemptPlan(36853, 1280, false, true))
 	want := [][2]int{{36853, 1280}, {443, 1280}}
+	if got[1][1] > fallbackMTU {
+		t.Fatalf("на 443 MTU %d больше потолка %d", got[1][1], fallbackMTU)
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("AttemptPlan = %v, want %v", got, want)
 	}

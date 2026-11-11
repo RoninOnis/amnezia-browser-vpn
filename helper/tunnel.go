@@ -82,6 +82,13 @@ type PortMtuAttempt struct {
 // разрешён только на 443 (QUIC), а корпоративный туннель заодно режет MTU до 1400.
 // Поэтому сначала штатный порт с MTU профиля — на нормальной сети это
 // единственная попытка, — затем понижение MTU, затем тот же перебор на 443.
+// fallbackMTU — потолок MTU для попытки на 443. Если штатный порт молчит и мы уходим
+// на 443, то почти наверняка в тракте корпоративный VPN (AnyConnect и подобные) с MTU
+// 1400, а то и спутник сверху. Рукопожатие при этом проходит с любым MTU — оно мелкое,
+// и подбор MTU по handshake ничего не замечает. Ломаются уже данные: 1376 внутренних
+// плюс обфускация AmneziaWG вылезают за 1400 и молча теряются.
+const fallbackMTU = 1280
+
 func AttemptPlan(port, mtu int, ladder, portFallback bool) []PortMtuAttempt {
 	if mtu <= 0 {
 		mtu = 1420
@@ -110,7 +117,11 @@ func AttemptPlan(port, mtu int, ladder, portFallback bool) []PortMtuAttempt {
 	// а расширение успевает сдаться и перезапустить подключение раньше.
 	add(port, mtu)
 	if portFallback && port != 443 {
-		add(443, mtu)
+		m := mtu
+		if m > fallbackMTU {
+			m = fallbackMTU // запасной путь почти всегда уже с чьим-то VPN в тракте
+		}
+		add(443, m)
 	}
 	if ladder && lower > 0 {
 		add(port, lower)
