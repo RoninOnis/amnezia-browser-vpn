@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Amnezia Browser VPN",
-  "version": "0.2.0",
-  "description": "AmneziaWG только для браузера: туннель через локальный хелпер, раздельное туннелирование по сайтам.",
+  "name": "AWG Browser Tunnel",
+  "version": "1.0.0",
+  "description": "Туннель AmneziaWG только для браузера, с разделением трафика по сайтам. Нужен локальный хелпер.",
+  "homepage_url": "https://github.com/RoninOnis/amnezia-browser-vpn",
   "browser_specific_settings": {
     "gecko": {
       "id": "awgbv@0xoni.ru",
@@ -29,7 +30,7 @@
     "<all_urls>"
   ],
   "action": {
-    "default_title": "Amnezia Browser VPN",
+    "default_title": "AWG Browser Tunnel",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",
