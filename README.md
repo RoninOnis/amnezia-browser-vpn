@@ -199,7 +199,7 @@ connect: no handshake on port 443 mtu 1240 (UDP may be blocked)     # не пр�
 
 ```bash
 cd helper && go test ./...                  # парсер vpn://, IPC, конфиги, лестница MTU, релей
-node --test extension/tests/*.test.mjs      # расширение на заглушке браузера: списки, MTU, панель, первый запуск
+node --test extension/tests/*.test.mjs      # расширение на заглушке браузера: списки, MTU, первый запуск
 python3 tests/e2e_nm.py dist/awgbv-linux-amd64 ./my.conf --expect-ip 203.0.113.10
 ```
 
