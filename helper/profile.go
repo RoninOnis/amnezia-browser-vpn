@@ -13,7 +13,13 @@ import (
 	"strings"
 )
 
-// AWGParams holds AmneziaWG obfuscation parameters (AWG 1.x and 2.x/3.x).
+// AWGParams holds AmneziaWG obfuscation parameters.
+//
+// AWG 1.x: Jc/Jmin/Jmax, S1-S4, H1-H4, I1-I5.
+// AWG 3 (protocol_version 3.x): плюс HeaderProtectionKey (защита заголовков),
+// ContentPaddingAddition, диапазоны переигровок и таймаутов, RandomTrailers,
+// DisableCookies. Без них современный сервер (amnezia-awg2 с AWG 3.x) молча
+// выбрасывает handshake, и это выглядит как «ключ не работает».
 type AWGParams struct {
 	Jc   string `json:"jc,omitempty"`
 	Jmin string `json:"jmin,omitempty"`
@@ -31,6 +37,17 @@ type AWGParams struct {
 	I3   string `json:"i3,omitempty"`
 	I4   string `json:"i4,omitempty"`
 	I5   string `json:"i5,omitempty"`
+
+	// AWG 3+
+	HeaderProtectionKey    string `json:"headerProtectionKey,omitempty"`
+	ContentPaddingAddition string `json:"contentPaddingAddition,omitempty"`
+	RekeyAfterTime         string `json:"rekeyAfterTime,omitempty"`
+	RekeyTimeout           string `json:"rekeyTimeout,omitempty"`
+	RejectAfterTime        string `json:"rejectAfterTime,omitempty"`
+	KeepaliveTimeout       string `json:"keepaliveTimeout,omitempty"`
+	MaxHandshakeAttempts   string `json:"maxHandshakeAttempts,omitempty"`
+	RandomTrailers         string `json:"randomTrailers,omitempty"`
+	DisableCookies         string `json:"disableCookies,omitempty"`
 }
 
 // Profile is everything needed to bring the tunnel up. Sent by the extension
@@ -132,18 +149,33 @@ func ParseVpnLink(link string) (*Profile, error) {
 	if raw, ok := awg["last_config"].(string); ok && raw != "" {
 		_ = json.Unmarshal([]byte(raw), &lc)
 	}
+	// В last_config значения лежат строками, а в самом контейнере те же поля
+	// Amnezia пишет числами (Jc: 6, S1: 12). Без числовой ветки обфускация
+	// молча терялась бы.
 	pick := func(key string) string {
+		from := func(v any) string {
+			switch t := v.(type) {
+			case string:
+				return t
+			case float64:
+				return strconv.FormatFloat(t, 'f', -1, 64)
+			case bool:
+				if t {
+					return "on"
+				}
+				return "off"
+			}
+			return ""
+		}
 		if lc != nil {
 			if v, ok := lc[key]; ok {
-				if s, ok := v.(string); ok && s != "" {
+				if s := from(v); s != "" {
 					return s
 				}
 			}
 		}
 		if v, ok := awg[key]; ok {
-			if s, ok := v.(string); ok {
-				return s
-			}
+			return from(v)
 		}
 		return ""
 	}
@@ -161,6 +193,16 @@ func ParseVpnLink(link string) (*Profile, error) {
 			S1: pick("S1"), S2: pick("S2"), S3: pick("S3"), S4: pick("S4"),
 			H1: pick("H1"), H2: pick("H2"), H3: pick("H3"), H4: pick("H4"),
 			I1: pick("I1"), I2: pick("I2"), I3: pick("I3"), I4: pick("I4"), I5: pick("I5"),
+
+			HeaderProtectionKey:    pick("HeaderProtectionKey"),
+			ContentPaddingAddition: pick("ContentPaddingAddition"),
+			RekeyAfterTime:         pick("RekeyAfterTime"),
+			RekeyTimeout:           pick("RekeyTimeout"),
+			RejectAfterTime:        pick("RejectAfterTime"),
+			KeepaliveTimeout:       pick("KeepaliveTimeout"),
+			MaxHandshakeAttempts:   pick("MaxHandshakeAttempts"),
+			RandomTrailers:         pick("RandomTrailers"),
+			DisableCookies:         pick("DisableCookies"),
 		},
 	}
 	if p.Host == "" {
@@ -264,6 +306,24 @@ func ParseConf(text string) (*Profile, error) {
 				p.AWG.I4 = v
 			case "I5":
 				p.AWG.I5 = v
+			case "HeaderProtectionKey":
+				p.AWG.HeaderProtectionKey = v
+			case "ContentPaddingAddition":
+				p.AWG.ContentPaddingAddition = v
+			case "RekeyAfterTime":
+				p.AWG.RekeyAfterTime = v
+			case "RekeyTimeout":
+				p.AWG.RekeyTimeout = v
+			case "RejectAfterTime":
+				p.AWG.RejectAfterTime = v
+			case "KeepaliveTimeout":
+				p.AWG.KeepaliveTimeout = v
+			case "MaxHandshakeAttempts":
+				p.AWG.MaxHandshakeAttempts = v
+			case "RandomTrailers":
+				p.AWG.RandomTrailers = v
+			case "DisableCookies":
+				p.AWG.DisableCookies = v
 			}
 		} else if section == "peer" {
 			switch k {

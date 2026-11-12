@@ -60,7 +60,7 @@ func stateDir() string {
 	}
 	// Платформу определяем по GOOS, а не по наличию переменной: при пустом
 	// LOCALAPPDATA (урезанное окружение, служба, отладка) раньше молча
-	// срабатывала Linux-ветка, и состояние с ключами панели уезжало в
+	// срабатывала Linux-ветка, и состояние уезжало в
 	// %USERPROFILE%\.local\state мимо каталога установки.
 	if runtime.GOOS == "windows" {
 		base := os.Getenv("LOCALAPPDATA")
@@ -352,5 +352,3 @@ func writeResp(conn net.Conn, resp response) {
 	}
 	_, _ = conn.Write(append(enc, '\n'))
 }
-
-func ptr[T any](v T) *T { return &v }

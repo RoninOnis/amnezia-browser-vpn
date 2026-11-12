@@ -11,11 +11,11 @@
   * подписанный .xpi — сам аддон;
   * install-linux.sh / install-windows.cmd — установка хелпера одной командой;
   * бинари хелпера и SHA256SUMS — их сверяет установщик;
-  * awgbv-peer.sh — серверная часть панели администратора (её скачивает хелпер);
-  * install-satellite.sh / install-relay.sh — установщики спутника и релея.
+  * install-satellite.sh — обход блокировок в сетях, где разрешён только UDP/443
+    (ставится вручную по README).
 
-SHA256SUMS расширяется хешами скриптов: и панель, и установщик спутника сверяют
-скачанный скрипт по этому файлу, иначе проверка молча пропускается.
+SHA256SUMS расширяется хешем скрипта: установщик спутника сверяет скачанный
+скрипт по этому файлу, иначе проверка молча пропускается.
 """
 import argparse
 import glob
@@ -87,10 +87,7 @@ def collect(version, require_xpi=True, xpi_path=""):
         f"{ROOT}/install/linux/install-remote.sh": "install-linux.sh",
         f"{ROOT}/install/windows/install-remote.cmd": "install-windows.cmd",
         f"{ROOT}/install/windows/uninstall-remote.cmd": "uninstall-windows.cmd",
-        f"{ROOT}/install/peer/awgbv-peer.sh": "awgbv-peer.sh",
-        f"{ROOT}/install/peer/install-peer.sh": "install-peer.sh",
         f"{ROOT}/install/relay/install-satellite.sh": "install-satellite.sh",
-        f"{ROOT}/install/relay/install-relay.sh": "install-relay.sh",
     }
     for src, name in copy.items():
         if not os.path.exists(src):

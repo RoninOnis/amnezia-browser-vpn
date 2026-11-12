@@ -10,10 +10,6 @@
 
 const NATIVE_HOST = "awgbv";
 const STATE_KEY = "settings";
-// Выпущенный ключ панели — единственная копия ссылки vpn://, и сервер её не хранит.
-// Держим её в storage.session: перезапуск самой event-страницы (она живёт секунды)
-// ссылку больше не теряет, а закрытие браузера — очищает, о чём честно сказано в карточке.
-const SESSION_KEY = "lastPeerKey";
 const POLL_ALARM = "awgbv-poll";
 const LOOPBACK = /^(localhost|127\.\d+\.\d+\.\d+|::1|\[::1\]|.*\.local|.*\.localhost)$/i;
 
@@ -58,15 +54,6 @@ const state = {
   updates: null,      // результат проверки версий аддона и хелпера
   updatingHelper: false, // идёт обновление хелпера
   lastHelperUpdate: null, // {at, ok, from, to, error}
-  // панель администратора
-  servers: [],       // [{host, port, addedAt}]
-  peers: null,       // последний список пиров с сервера
-  peerServer: "",    // для какого сервера этот список
-  peerBusy: false,   // идёт SSH-операция
-  peerError: "",     // текст последней ошибки панели
-  lastPeerKey: null, // {name, allowedIps, vpnLink} — только что выпущенный ключ
-  satellite: null,   // {dryRun, finished, output} — последний ответ установщика спутника
-  satelliteBusy: false,
 };
 
 const HOST_MISSING = /no such native application|native application .* not found|No such native/i;
@@ -309,14 +296,6 @@ function publicState() {
     updates: state.updates,
     updatingHelper: state.updatingHelper,
     lastHelperUpdate: state.lastHelperUpdate,
-    servers: state.servers,
-    peers: state.peers,
-    peerServer: state.peerServer,
-    peerBusy: state.peerBusy,
-    peerError: state.peerError,
-    lastPeerKey: state.lastPeerKey,
-    satellite: state.satellite,
-    satelliteBusy: state.satelliteBusy,
   };
 }
 
@@ -441,174 +420,6 @@ async function updateHelper() {
       await refresh();
     } catch (_) {}
     checkVersions(true).catch(() => {});
-  }
-}
-
-/* ------------------------------------------------- панель администратора */
-
-// storage.session может отсутствовать (старые сборки): тогда ключ живёт только
-// в памяти, как раньше, но интерфейс не падает.
-async function saveSessionKey(key) {
-  state.lastPeerKey = key;
-  try {
-    if (key) await browser.storage.session.set({ [SESSION_KEY]: key });
-    else await browser.storage.session.remove(SESSION_KEY);
-  } catch (_) {}
-}
-
-async function loadSessionKey() {
-  try {
-    const got = await browser.storage.session.get(SESSION_KEY);
-    state.lastPeerKey = (got && got[SESSION_KEY]) || null;
-  } catch (_) {
-    state.lastPeerKey = null;
-  }
-  return state.lastPeerKey;
-}
-
-// Пароль SSH передаётся в хелпер ТОЛЬКО для первичной настройки и никогда не
-// сохраняется ни в storage, ни в state: дальше работа идёт ключом панели.
-async function bootstrapServer({ host, port, user, password }) {
-  state.peerBusy = true;
-  state.peerError = "";
-  notifyUI();
-  try {
-    const res = await sendNative("peer_bootstrap", {
-      host, sshPort: Number(port) || 22, sshUser: user || "root", password,
-    }, 180000);
-    if (!res || !res.ok) {
-      state.peerError = (res && res.error) || "не удалось настроить сервер";
-      return { ok: false, error: state.peerError };
-    }
-    state.servers = res.servers || [];
-    state.peerServer = host;
-    return { ok: true, selftest: (res.peer && res.peer.selftest) || "" };
-  } finally {
-    state.peerBusy = false;
-    notifyUI();
-  }
-}
-
-async function loadPeers(host) {
-  const target = host || state.peerServer || (state.servers[0] && state.servers[0].host) || "";
-  if (!target) return { ok: false, error: "сервер не выбран" };
-  state.peerBusy = true;
-  state.peerError = "";
-  notifyUI();
-  try {
-    const res = await sendNative("peer_list", { host: target }, 60000);
-    if (!res || !res.ok) {
-      state.peerError = (res && res.error) || "не удалось получить список пиров";
-      return { ok: false, error: state.peerError };
-    }
-    state.peers = res.peers || null;
-    state.peerServer = target;
-    return { ok: true, peers: state.peers };
-  } finally {
-    state.peerBusy = false;
-    notifyUI();
-  }
-}
-
-// Выпуск нового ключа: приватный ключ создаётся в хелпере, сюда приходит только
-// готовая ссылка vpn://.
-//
-// Успех — это НЕ res.ok. Хелпер отвечает ok=true и при неудачной сборке ссылки:
-// внутри лежит peer.ok=false и пустой vpnLink (а с будущей версией — ещё и
-// reply.ok=false). Без проверки ссылки попап показывал «Новый ключ готов»
-// с пустым полем, и пользователь оставался без ключа и без ошибки.
-async function createPeer(name) {
-  const target = state.peerServer || (state.servers[0] && state.servers[0].host) || "";
-  if (!target) return { ok: false, error: "сервер не выбран" };
-  state.peerBusy = true;
-  state.peerError = "";
-  await saveSessionKey(null);
-  notifyUI();
-  try {
-    const res = await sendNative("peer_create", { host: target, name: name || "клиент" }, 90000);
-    const peer = (res && res.peer) || {};
-    const vpnLink = String(peer.vpnLink || "");
-    const peerOk = peer.ok !== false;
-    if (!res || res.ok !== true || !peerOk || !vpnLink) {
-      state.peerError = ((!res || res.ok !== true) && res && res.error)
-        || peer.error
-        || "хелпер не вернул ссылку vpn:// — ключ не выпущен";
-      return { ok: false, error: state.peerError };
-    }
-    await saveSessionKey({
-      name: peer.name || name || "клиент",
-      allowedIps: peer.allowedIps || "",
-      publicKey: peer.publicKey || "",
-      vpnLink,
-      adopted: false,
-    });
-    await loadPeers(target);
-    return { ok: true, key: state.lastPeerKey };
-  } finally {
-    state.peerBusy = false;
-    notifyUI();
-  }
-}
-
-async function revokePeer(publicKey) {
-  const target = state.peerServer || (state.servers[0] && state.servers[0].host) || "";
-  if (!target) return { ok: false, error: "сервер не выбран" };
-  state.peerBusy = true;
-  state.peerError = "";
-  notifyUI();
-  try {
-    const res = await sendNative("peer_revoke", { host: target, publicKey }, 60000);
-    if (!res || !res.ok) {
-      state.peerError = (res && res.error) || "не удалось отозвать ключ";
-      return { ok: false, error: state.peerError };
-    }
-    if (state.lastPeerKey && state.lastPeerKey.publicKey === publicKey) await saveSessionKey(null);
-    await loadPeers(target);
-    return { ok: true };
-  } finally {
-    state.peerBusy = false;
-    notifyUI();
-  }
-}
-
-// Готовую ссылку отдаём в наш же список профилей: пользователь сразу видит новый
-// сервер на вкладке «Серверы» и может подключиться. Повторное нажатие не плодит
-// дубликаты: addProfile возвращает уже существующий профиль по той же ссылке.
-async function adoptPanelKey() {
-  const key = state.lastPeerKey;
-  if (!key || !key.vpnLink) return { ok: false, error: "нет выпущенного ключа" };
-  const res = await addProfile(key.vpnLink);
-  if (res && res.ok) {
-    // кнопка в попапе после успеха скрывается: второй раз добавлять нечего
-    await saveSessionKey({ ...key, adopted: true });
-  }
-  return res;
-}
-
-// Спутник ставится системной службой от root, поэтому это ОТДЕЛЬНОЕ действие с
-// полным SSH-доступом: ограниченный ключ панели намеренно такого не умеет.
-async function runSatellite({ host, port, user, password, dryRun, openFirewall }) {
-  state.satelliteBusy = true;
-  notifyUI();
-  try {
-    const res = await sendNative(dryRun ? "satellite_plan" : "satellite_install", {
-      host, sshPort: Number(port) || 22, sshUser: user || "root", password,
-      dryRun: !!dryRun, openFirewall: !!openFirewall,
-    }, 300000);
-    state.satellite = (res && res.satellite) || null;
-    if (res && !res.ok && !state.satellite) {
-      state.satellite = { dryRun: !!dryRun, finished: false, output: (res && res.error) || "нет ответа" };
-    }
-    if (state.satellite) {
-      // факт «firewall меняли или нет» попап обязан показать честно: хелпер это
-      // поле не возвращает, поэтому запоминаем, что мы у него просили
-      state.satellite.openFirewall = !!openFirewall && !dryRun;
-      if (res && !res.ok && !state.satellite.output) state.satellite.output = res.error || "";
-    }
-    return { ok: !!(res && res.ok), satellite: state.satellite };
-  } finally {
-    state.satelliteBusy = false;
-    notifyUI();
   }
 }
 
@@ -750,18 +561,6 @@ async function refreshStatus() {
   }
   // Авто-лечение: включено, а туннеля нет (перезагрузка, падение демона, обновление бинаря).
   await ensureTunnel();
-  // Список серверов панели: дешёвая локальная операция, можно ждать.
-  if (!state.servers.length && !state.helperMissing) {
-    const servers = await sendNative("peer_servers", {}, 8000);
-    if (servers && servers.ok && Array.isArray(servers.servers)) state.servers = servers.servers;
-  }
-  // Сервер уже настроен, а ключей в попапе нет (перезапуск браузера, новая сессия
-  // event-страницы): подтягиваем список сами. Раньше попап показывал пустой список
-  // и форму с SSH-паролем, будто сервер вообще не настраивали.
-  // Одной попытки достаточно: после ошибки ждём явного «Обновить список».
-  if (state.servers.length && !state.peers && !state.peerBusy && !state.peerError && !state.helperMissing) {
-    await loadPeers(state.peerServer || state.servers[0].host);
-  }
   // Проверку версий делаем один раз за сессию и не ждём её: она ходит в сеть.
   if (!state.updates && !state.helperMissing) checkVersions(false).catch(() => {});
   return publicState();
@@ -771,7 +570,7 @@ async function refreshStatus() {
 
 async function addProfile(link) {
   const clean = String(link || "").trim();
-  // Та же ссылка уже добавлена (например, повторное «Добавить в мои серверы»):
+  // Та же ссылка уже добавлена (человек вставил её второй раз):
   // возвращаем существующий профиль, а не второй такой же в списке «Серверы».
   const existing = state.settings.profiles.find((p) => p.link && p.link === clean);
   if (existing) {
@@ -824,20 +623,6 @@ browser.runtime.onMessage.addListener((msg) => {
       return Promise.resolve({ ok: true, state: publicState() });
     case "updateHelper":
       return updateHelper();
-    case "bootstrapServer":
-      return bootstrapServer(msg).then((res) => ({ ...res, state: publicState() }));
-    case "loadPeers":
-      return loadPeers(msg.host).then((res) => ({ ...res, state: publicState() }));
-    case "createPeer":
-      return createPeer(msg.name).then((res) => ({ ...res, state: publicState() }));
-    case "revokePeer":
-      return revokePeer(msg.publicKey).then((res) => ({ ...res, state: publicState() }));
-    case "satellitePlan":
-      return runSatellite({ ...msg, dryRun: true }).then((res) => ({ ...res, state: publicState() }));
-    case "satelliteInstall":
-      return runSatellite({ ...msg, dryRun: false }).then((res) => ({ ...res, state: publicState() }));
-    case "adoptPanelKey":
-      return adoptPanelKey().then((res) => ({ ...res, state: publicState() }));
     case "checkVersions":
       return checkVersions(!!msg.force)
         .then((updates) => ({ ok: true, updates, state: publicState() }))
@@ -934,8 +719,6 @@ const ready = loadSettings().then(async () => {
   } catch (err) {
     state.platformOs = "";
   }
-  // выпущенный ключ переживает перезапуск event-страницы (storage.session)
-  await loadSessionKey();
   await browser.alarms.create(POLL_ALARM, { periodInMinutes: 1 });
   updateBadge();
   if (state.settings.enabled && state.settings.autoConnect) {

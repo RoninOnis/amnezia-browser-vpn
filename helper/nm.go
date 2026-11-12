@@ -29,31 +29,16 @@ type nmMessage struct {
 	RelayAddr    string   `json:"relayAddr,omitempty"`
 	RelayToken   string   `json:"relayToken,omitempty"`
 	Force        bool     `json:"force,omitempty"`
-	// панель администратора
-	Host      string       `json:"host,omitempty"`
-	SSHPort   flexiblePort `json:"sshPort,omitempty"`
-	SSHUser   string       `json:"sshUser,omitempty"`
-	Password  string       `json:"password,omitempty"`
-	KeyPath   string       `json:"keyPath,omitempty"`
-	Name      string       `json:"name,omitempty"`
-	PublicKey string       `json:"publicKey,omitempty"`
-	// спутник сервера
-	DryRun       *bool `json:"dryRun,omitempty"`
-	OpenFirewall bool  `json:"openFirewall,omitempty"`
 }
 
 type nmReply struct {
-	ID        int64             `json:"id,omitempty"`
-	OK        bool              `json:"ok"`
-	Error     string            `json:"error,omitempty"`
-	Status    *TunnelStatus     `json:"status,omitempty"`
-	Version   string            `json:"version,omitempty"`
-	Update    *UpdateInfo       `json:"update,omitempty"`
-	SelfUp    *SelfUpdateResult `json:"selfUpdate,omitempty"`
-	Peers     *PeerList         `json:"peers,omitempty"`
-	Peer      map[string]any    `json:"peer,omitempty"`
-	Servers   []ServerRecord    `json:"servers,omitempty"`
-	Satellite *SatelliteResult  `json:"satellite,omitempty"`
+	ID      int64             `json:"id,omitempty"`
+	OK      bool              `json:"ok"`
+	Error   string            `json:"error,omitempty"`
+	Status  *TunnelStatus     `json:"status,omitempty"`
+	Version string            `json:"version,omitempty"`
+	Update  *UpdateInfo       `json:"update,omitempty"`
+	SelfUp  *SelfUpdateResult `json:"selfUpdate,omitempty"`
 }
 
 func runNativeMessaging() error {
@@ -122,48 +107,14 @@ func waitSettled(timeout time.Duration) *TunnelStatus {
 // humanParseError переводит ошибку разбора кадра в понятный текст.
 func humanParseError(err error) string {
 	text := err.Error()
-	switch {
-	case strings.Contains(text, "порт SSH"):
-		return text
-	case strings.Contains(text, "cannot unmarshal"):
+	if strings.Contains(text, "cannot unmarshal") {
 		// типовое: в числовое поле прислали не число
 		return "не понял значение в запросе — проверьте, что в полях числа, а не текст"
-	default:
-		return "не понял запрос от расширения, попробуйте ещё раз"
 	}
-}
-
-// normalizePanelInput приводит ввод пользователя к рабочему виду один раз, до
-// разбора по командам: люди вставляют «https://vpn.ru/», «vpn.ru:2222» или
-// оставляют поле порта пустым, и раньше это либо ломало разбор кадра, либо
-// уходило в ssh как есть и давало подсказку не про свою ошибку.
-func normalizePanelInput(msg *nmMessage) {
-	if strings.TrimSpace(msg.Host) == "" {
-		return
-	}
-	clean, hostPort := normalizeHost(msg.Host)
-	msg.Host = clean
-	if msg.SSHPort.Int() == 0 && hostPort > 0 {
-		msg.SSHPort = flexiblePort(hostPort)
-	}
-}
-
-// команды, которым обязателен адрес сервера: без него раньше получалось
-// «сервер :22 не принял логин или пароль» — то есть подсказка не про ошибку
-func needsHost(cmd string) bool {
-	switch cmd {
-	case "peer_bootstrap", "peer_selftest", "peer_list", "peer_create", "peer_revoke",
-		"satellite_plan", "satellite_install":
-		return true
-	}
-	return false
+	return "не понял запрос от расширения, попробуйте ещё раз"
 }
 
 func handleNM(msg nmMessage) nmReply {
-	normalizePanelInput(&msg)
-	if needsHost(msg.Cmd) && msg.Host == "" {
-		return nmReply{ID: msg.ID, OK: false, Error: "не указан адрес сервера — впишите IP или домен, например 203.0.113.10"}
-	}
 	reply := nmReply{ID: msg.ID, OK: true}
 	switch msg.Cmd {
 	case "ping":
@@ -183,29 +134,6 @@ func handleNM(msg nmMessage) nmReply {
 		}
 		reply.OK, reply.Error, reply.Status = resp.OK, resp.Error, resp.Status
 		return reply
-	case "satellite_plan", "satellite_install":
-		// Установка спутника требует полного SSH (root) и выполняется прямо здесь.
-		dry := msg.Cmd == "satellite_plan"
-		if msg.DryRun != nil {
-			dry = *msg.DryRun
-		}
-		res, err := SatelliteRun(SatelliteRequest{
-			Host: msg.Host, Port: msg.SSHPort.Int(), User: msg.SSHUser,
-			Password: msg.Password, KeyPath: msg.KeyPath,
-			DryRun: dry, OpenFirewall: msg.OpenFirewall,
-		})
-		reply.Satellite = res
-		if err != nil {
-			reply.OK, reply.Error = false, err.Error()
-			return reply
-		}
-		reply.OK = true
-		return reply
-	case "peer_bootstrap", "peer_selftest", "peer_list", "peer_create", "peer_revoke", "peer_servers":
-		// Панель администратора. Не требует живого туннеля, поэтому выполняется
-		// прямо здесь, а не через демон: иначе команда падала бы, если демон
-		// ещё не поднят (та же грабля, что была с update_check).
-		return handlePeer(msg, reply)
 	case "self_update":
 		res := selfUpdate()
 		reply.OK = res.Error == ""
@@ -297,71 +225,6 @@ func handleNM(msg nmMessage) nmReply {
 		reply.OK, reply.Error = false, "unknown cmd "+msg.Cmd
 		return reply
 	}
-}
-
-// handlePeer — операции панели. Пароль SSH нигде не сохраняется и не пишется в лог.
-func handlePeer(msg nmMessage, reply nmReply) nmReply {
-	switch msg.Cmd {
-	case "peer_servers":
-		reply.OK = true
-		reply.Servers = loadServers()
-	case "peer_bootstrap":
-		res, err := PeerBootstrap(BootstrapRequest{
-			Host: msg.Host, Port: msg.SSHPort.Int(), User: msg.SSHUser,
-			Password: msg.Password, KeyPath: msg.KeyPath,
-		})
-		if err != nil {
-			reply.OK, reply.Error = false, err.Error()
-			return reply
-		}
-		reply.OK = true
-		reply.Peer = res
-		reply.Servers = loadServers()
-	case "peer_selftest":
-		list, err := PeerSelftest(msg.Host, msg.SSHPort.Int())
-		if err != nil {
-			reply.OK, reply.Error = false, err.Error()
-			return reply
-		}
-		reply.OK, reply.Peers = true, list
-	case "peer_list":
-		list, err := PeerListPeers(msg.Host, msg.SSHPort.Int())
-		if err != nil {
-			reply.OK, reply.Error = false, err.Error()
-			return reply
-		}
-		reply.OK, reply.Peers = true, list
-	case "peer_create":
-		res, err := PeerCreate(msg.Host, msg.SSHPort.Int(), msg.Name)
-		if err != nil {
-			reply.OK, reply.Error = false, err.Error()
-			return reply
-		}
-		reply.Peer = res
-		// Успех только если пир ДОБАВЛЕН и ссылка собрана. Иначе панель показывала
-		// «Новый ключ готов» с пустым полем, а пир уже висел на сервере.
-		if ok, _ := res["ok"].(bool); ok {
-			link, _ := res["vpnLink"].(string)
-			if link == "" {
-				reply.OK, reply.Error = false, "пир добавлен, но ссылка не собрана — отзовите ключ и попробуйте снова"
-			} else {
-				reply.OK = true
-			}
-		} else {
-			reply.OK = false
-			reply.Error, _ = res["error"].(string)
-			if reply.Error == "" {
-				reply.Error = "не удалось выпустить ключ"
-			}
-		}
-	case "peer_revoke":
-		if err := PeerRevoke(msg.Host, msg.SSHPort.Int(), msg.PublicKey); err != nil {
-			reply.OK, reply.Error = false, err.Error()
-			return reply
-		}
-		reply.OK = true
-	}
-	return reply
 }
 
 func randomToken() (string, error) {

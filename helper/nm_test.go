@@ -34,6 +34,22 @@ func TestNMMessageKeepsTuningFields(t *testing.T) {
 	}
 }
 
+// «bad json» ничего не объяснял пользователю: текст ошибки разбора кадра должен
+// быть внятным, поэтому проверяем сам перевод ошибки.
+func TestHumanParseError(t *testing.T) {
+	if got := humanParseError(parseErr("json: cannot unmarshal string into Go struct field x")); got == "" ||
+		got == "bad json" {
+		t.Errorf("нечеловеческий текст: %q", got)
+	}
+	if got := humanParseError(parseErr("unexpected end of JSON input")); got == "" {
+		t.Error("пустой текст ошибки разбора")
+	}
+}
+
+type parseErr string
+
+func (e parseErr) Error() string { return string(e) }
+
 // portFallback по умолчанию включён: запрос без поля должен давать попытку на 443.
 func TestPortFallbackDefaultsOn(t *testing.T) {
 	var req request

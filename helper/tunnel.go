@@ -166,6 +166,64 @@ func obfLines(p *Profile) []string {
 	return out
 }
 
+// awg3Lines — параметры AmneziaWG 3 (protocol_version 3.x). Имена и форматы
+// взяты из UAPI amneziawg-go v3: header_protection_key ждёт HEX (в конфиге и в
+// vpn:// он в base64), тайминги — диапазон "lo-hi", random_trailers и
+// disable_cookies — bool, хотя в конфиге пишут on/off.
+//
+// Без этих строк сервер на AWG 3.x молча выбрасывает handshake: заголовки
+// пакетов не защищены так, как он ждёт, и в логе клиента нет даже ошибки —
+// выглядит как «ключ не работает».
+func awg3Lines(p *Profile) ([]string, error) {
+	a := p.AWG
+	var out []string
+	if v := strings.TrimSpace(a.HeaderProtectionKey); v != "" && v != "0" {
+		hexKey, err := b64ToHexKey(v)
+		if err != nil {
+			return nil, fmt.Errorf("header protection key: %w", err)
+		}
+		out = append(out, "header_protection_key="+hexKey+"\n")
+	}
+	ranges := [][2]string{
+		{"content_padding_addition", a.ContentPaddingAddition},
+		{"rekey_after_time", a.RekeyAfterTime},
+		{"rekey_timeout", a.RekeyTimeout},
+		{"reject_after_time", a.RejectAfterTime},
+		{"keepalive_timeout", a.KeepaliveTimeout},
+		{"max_handshake_attempts", a.MaxHandshakeAttempts},
+	}
+	for _, kv := range ranges {
+		v := strings.TrimSpace(kv[1])
+		if v == "" || v == "0" {
+			continue
+		}
+		out = append(out, kv[0]+"="+v+"\n")
+	}
+	flags := [][2]string{
+		{"random_trailers", a.RandomTrailers},
+		{"disable_cookies", a.DisableCookies},
+	}
+	for _, kv := range flags {
+		v, ok := onOffValue(kv[1])
+		if !ok {
+			continue
+		}
+		out = append(out, kv[0]+"="+v+"\n")
+	}
+	return out, nil
+}
+
+// onOffValue приводит on/off из конфига Amnezia к bool, который ждёт UAPI.
+func onOffValue(v string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "on", "true", "yes", "1":
+		return "true", true
+	case "off", "false", "no", "0":
+		return "false", true
+	}
+	return "", false
+}
+
 func (p *Profile) ipcSet() (string, error) {
 	var b strings.Builder
 	privHex, err := b64ToHexKey(p.PrivateKey)
@@ -174,6 +232,13 @@ func (p *Profile) ipcSet() (string, error) {
 	}
 	fmt.Fprintf(&b, "private_key=%s\n", privHex)
 	for _, l := range obfLines(p) {
+		b.WriteString(l)
+	}
+	awg3, err := awg3Lines(p)
+	if err != nil {
+		return "", err
+	}
+	for _, l := range awg3 {
 		b.WriteString(l)
 	}
 

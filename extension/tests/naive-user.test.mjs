@@ -131,14 +131,6 @@ const BASE_STATE = {
   tunnel: { running: false, state: "stopped" },
   lastError: "",
   updates: null,
-  servers: [{ host: "vpn.example.com", port: 22 }],
-  peers: null,
-  peerServer: "vpn.example.com",
-  peerBusy: false,
-  peerError: "",
-  lastPeerKey: null,
-  satellite: null,
-  satelliteBusy: false,
 };
 
 function makeState(patch = {}) {
@@ -149,7 +141,7 @@ async function boot() {
   const doc = makeDocument();
   const sent = [];
   const dialogs = [];
-  const env = { state: null, replies: {}, promptAnswer: "ноутбук", confirmAnswer: true };
+  const env = { state: null, replies: {}, confirmAnswer: true };
 
   const browser = {
     runtime: {
@@ -184,7 +176,6 @@ async function boot() {
       dialogs.push(text);
       return env.confirmAnswer;
     },
-    prompt: () => env.promptAnswer,
     navigator: { clipboard: { writeText: async () => {} } },
     fetch: async () => ({ ok: true, json: async () => ({}) }),
     URL,
@@ -295,58 +286,6 @@ test("пустое поле ключа объясняет, что вставит
   await assert.rejects(async () => ui.ctx.awgbvDecodeVpn(""), /vpn:\/\//);
 });
 
-test("во время операции кнопка не молчит, а объясняет, почему ничего не произошло", async () => {
-  const ui = await boot();
-  await renderWith(ui, makeState({ peerBusy: true }));
-
-  const connect = ui.el("#btnAdminConnect");
-  assert.equal(connect.getAttribute("aria-disabled"), "true", "кнопка помечена занятой");
-  assert.equal(connect.disabled, false, "но нажать её можно — иначе человек не поймёт, что происходит");
-
-  ui.el("#admHost").value = "";
-  await click(ui, connect);
-  assert.match(ui.el("#admConnectHint").textContent, /идёт другая операция/);
-  assert.equal(ui.el("#admConnectHint").classList.contains("warn"), true);
-  assert.equal(ui.sent.filter((m) => m.cmd === "bootstrapServer").length, 0,
-    "вторая операция не должна уходить в хелпер");
-});
-
-test("пустой адрес в форме подключения — сообщение про адрес, а не про пароль", async () => {
-  const ui = await boot();
-  await renderWith(ui, makeState({ peerBusy: false, servers: [] }));
-  ui.el("#admHost").value = "   ";
-  ui.el("#admPassword").value = "";
-  await click(ui, ui.el("#btnAdminConnect"));
-  assert.match(ui.el("#admConnectHint").textContent, /адрес/i);
-  assert.equal(ui.sent.filter((m) => m.cmd === "bootstrapServer").length, 0);
-});
-
-test("адрес с https:// и портом в строке уходит в хелпер без мусора", async () => {
-  const ui = await boot();
-  await renderWith(ui, makeState({ servers: [], peerBusy: false }));
-  ui.el("#admHost").value = "  https://vpn.example.com/  ";
-  ui.el("#admPort").value = "";
-  ui.el("#admPassword").value = "секрет";
-  await click(ui, ui.el("#btnAdminConnect"));
-  const msg = ui.sent.filter((m) => m.cmd === "bootstrapServer").pop();
-  assert.ok(msg, "запрос должен уйти");
-  assert.equal(msg.host, "vpn.example.com", "схему и слэш надо снять");
-  assert.equal(msg.port, 22, "пустой порт — это 22");
-});
-
-test("порт, набранный в строке адреса, переезжает в поле порта", async () => {
-  const ui = await boot();
-  await renderWith(ui, makeState({ servers: [], peerBusy: false }));
-  ui.el("#admHost").value = "vpn.example.com:2222";
-  ui.el("#admPort").value = "";
-  ui.el("#admPassword").value = "секрет";
-  await click(ui, ui.el("#btnAdminConnect"));
-  const msg = ui.sent.filter((m) => m.cmd === "bootstrapServer").pop();
-  assert.equal(msg.host, "vpn.example.com");
-  assert.equal(msg.port, 2222, "порт из строки не должен теряться");
-  assert.equal(ui.el("#admPort").value, "2222", "человек должен увидеть, что порт распознан");
-});
-
 /* ---------------------------------------- первый запуск: понятно ли, что делать */
 
 test("первый запуск: главная не обещает подключение, а показывает, что нажать", async () => {
@@ -394,15 +333,4 @@ test("подсказка про списки не противоречит бе�
   ui.ctx.showScreen("sites");
   assert.match(ui.el("#modeBadge").textContent, /только сайты из списка/);
   assert.match(ui.el("#sitesHint").textContent, /только сайты из этого списка/i);
-});
-
-test("на «Панели» видно, что раздел необязательный, и есть выход к ключу", async () => {
-  const ui = await boot();
-  await renderWith(ui, makeState({ servers: [], profiles: [] }));
-  ui.ctx.showScreen("admin");
-  const noServer = ui.el("#btnNoServer");
-  assert.ok(noServer.handlers.click && noServer.handlers.click.length,
-    "кнопка «у меня нет своего сервера» должна работать");
-  await click(ui, noServer);
-  assert.equal(ctxVar(ui, "currentScreen"), "servers");
 });
