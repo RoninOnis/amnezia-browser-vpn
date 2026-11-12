@@ -106,9 +106,16 @@ echo    1^) restart Firefox - the list of native hosts is read at startup
 echo    2^) open the extension popup and press "Check again"
 echo    3^) add your vpn:// link in the Servers tab
 echo.
-if /i "%~1"=="/nopause" exit /b 0
+if /i "%~1"=="/nopause" goto :selfclean
 pause
-exit /b 0
+:selfclean
+if /i "%~1"=="/keep" exit /b 0
+if /i "%KEEP_SCRIPT%"=="1" exit /b 0
+echo.
+echo  This installer is a one-shot file: removing %~nx0 ...
+rem (goto) 2>nul ends this batch context so the running file can be deleted;
+rem without it cmd keeps reading the file and del fails with "in use".
+(goto) 2>nul & del /f /q "%~f0" & exit /b 0
 
 rem ---------------------------------------------------------------------------
 :fetch

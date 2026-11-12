@@ -5,8 +5,9 @@
 #   VERSION=v0.1.1 bash install-linux.sh
 #
 # Flags / env:
-#   VERSION   release tag (default: v0.1.1)
-#   DRY_RUN=1 only print what would be done
+#   VERSION      release tag (default: latest)
+#   DRY_RUN=1    only print what would be done
+#   KEEP_SCRIPT=1 keep this file after a successful install (по умолчанию удаляется)
 set -euo pipefail
 
 VERSION="${VERSION:-latest}"
@@ -127,3 +128,21 @@ echo "  \"$BIN_DST\" --status"
 echo "  \"$BIN_DST\" --connect /путь/к/config.conf --listen 127.0.0.1:1081"
 echo "  curl --socks5-hostname 127.0.0.1:1081 https://api.ipify.org"
 echo "  $BIN_DST --stop"
+echo
+
+# Установщик одноразовый: после успешной установки удаляем сам файл, чтобы в
+# «Загрузках» не лежал скрипт, который ещё раз поставит/подменит помощника.
+# KEEP_SCRIPT=1 отключает; при запуске через pipe (curl | bash) файла нет —
+# тогда просто ничего не делаем. При ошибке файл остаётся: его перезапускают.
+if [[ "${KEEP_SCRIPT:-0}" != "1" ]]; then
+  self="${BASH_SOURCE[0]:-}"
+  if [[ -n "$self" && -f "$self" ]]; then
+    if rm -f -- "$self" 2>/dev/null; then
+      echo "→ файл установщика удалён: $self"
+      echo "  понадобится снова — скачайте тем же способом из релизов:"
+      echo "  https://github.com/$REPO/releases/latest/download/install-linux.sh"
+    else
+      echo "! не удалось удалить файл установщика: $self (можно удалить вручную)"
+    fi
+  fi
+fi

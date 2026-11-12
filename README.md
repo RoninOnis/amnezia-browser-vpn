@@ -52,6 +52,11 @@ install-windows.cmd            :: Windows: чистый batch, curl.exe + certut
 `%LOCALAPPDATA%\AwgBrowserVpn\awgbv.exe` (Windows), плюс манифест native messaging
 (внутрь snap-песочницы, если Firefox — snap).
 
+После успешной установки установщик удаляет сам себя — в «Загрузках» не остаётся скрипт,
+который может ещё раз подменить помощника. Файл остаётся, если установка не удалась
+(его перезапускают) и если попросить об этом явно: `KEEP_SCRIPT=1 bash install-linux.sh`
+или `install-windows.cmd /keep`.
+
 **2. Расширение** — подписанный `.xpi` из [releases](https://github.com/RoninOnis/amnezia-browser-vpn/releases):
 `about:addons` → шестерёнка → «Установить дополнение из файла». Подписано на AMO по каналу
 **unlisted**: в каталоге не публикуется, но ставится как обычное дополнение и переживает перезапуск.
