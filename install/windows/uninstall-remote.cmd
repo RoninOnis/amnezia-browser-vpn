@@ -5,7 +5,7 @@ rem
 rem  Removes:
 rem    - native messaging registry key (HKCU, no admin needed)
 rem    - the helper binary and its manifest in %LOCALAPPDATA%\AwgBrowserVpn
-rem    - the helper state (log, control file, panel key) in the same folder
+rem    - the helper state (log, control file, token) in the same folder
 rem
 rem  Keeps: nothing. The extension itself is removed from Firefox by the user.
 rem
